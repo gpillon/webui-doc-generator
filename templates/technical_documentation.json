@@ -1,0 +1,131 @@
+{
+  "name": "Technical Documentation",
+  "description": "Comprehensive template for technical documentation and guides",
+  "sections": [
+    {
+      "name": "overview",
+      "title": "Overview",
+      "prompt": "Write a concise overview of {topic}, explaining what it is and its primary purpose.",
+      "children": []
+    },
+    {
+      "name": "architecture",
+      "title": "Architecture",
+      "prompt": "Describe the architecture of {topic}, including key components and how they interact.",
+      "children": [
+        {
+          "name": "architecture_components",
+          "title": "Key Components",
+          "prompt": "Detail the main components of {topic}'s architecture. Describe each component's purpose and functionality.",
+          "children": []
+        },
+        {
+          "name": "architecture_diagrams",
+          "title": "Architecture Diagrams",
+          "prompt": "Describe how you would visualize the architecture of {topic} using diagrams. Explain what each diagram would show.",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "installation",
+      "title": "Installation",
+      "prompt": "Provide detailed installation instructions for {topic}. Include prerequisites and system requirements.",
+      "children": [
+        {
+          "name": "installation_prerequisites",
+          "title": "Prerequisites",
+          "prompt": "List and explain all prerequisites needed before installing {topic}.",
+          "children": []
+        },
+        {
+          "name": "installation_steps",
+          "title": "Installation Steps",
+          "prompt": "Provide step-by-step instructions for installing {topic}.",
+          "children": []
+        },
+        {
+          "name": "installation_verification",
+          "title": "Verification",
+          "prompt": "Explain how to verify that {topic} has been installed correctly.",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "configuration",
+      "title": "Configuration",
+      "prompt": "Explain how to configure {topic} after installation. Include important configuration options and best practices.",
+      "children": [
+        {
+          "name": "configuration_files",
+          "title": "Configuration Files",
+          "prompt": "Describe the key configuration files for {topic} and their purpose.",
+          "children": []
+        },
+        {
+          "name": "configuration_parameters",
+          "title": "Important Parameters",
+          "prompt": "List and explain important configuration parameters for {topic}.",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "usage",
+      "title": "Usage",
+      "prompt": "Provide comprehensive usage instructions for {topic}. Include common operations and examples.",
+      "children": [
+        {
+          "name": "usage_basic",
+          "title": "Basic Usage",
+          "prompt": "Explain the basic usage of {topic} with simple examples.",
+          "children": []
+        },
+        {
+          "name": "usage_advanced",
+          "title": "Advanced Usage",
+          "prompt": "Describe advanced usage scenarios and features of {topic}.",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "troubleshooting",
+      "title": "Troubleshooting",
+      "prompt": "Provide troubleshooting information for common issues with {topic}.",
+      "children": [
+        {
+          "name": "troubleshooting_common_issues",
+          "title": "Common Issues",
+          "prompt": "Describe common issues that users encounter with {topic} and their solutions.",
+          "children": []
+        },
+        {
+          "name": "troubleshooting_diagnostics",
+          "title": "Diagnostic Tools",
+          "prompt": "Explain what diagnostic tools and logs are available for troubleshooting {topic}.",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "security",
+      "title": "Security Considerations",
+      "prompt": "Discuss important security considerations for {topic}. Include best practices for secure deployment and usage.",
+      "children": []
+    },
+    {
+      "name": "api_reference",
+      "title": "API Reference",
+      "prompt": "Provide an overview of the APIs available for {topic}, if applicable.",
+      "children": []
+    },
+    {
+      "name": "references",
+      "title": "References",
+      "prompt": "List relevant references and additional resources for {topic}.",
+      "children": []
+    }
+  ]
+} 

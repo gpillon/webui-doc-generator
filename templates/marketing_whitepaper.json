@@ -1,0 +1,130 @@
+{
+  "name": "Marketing Whitepaper",
+  "description": "Professional template for product whitepapers and marketing documents",
+  "sections": [
+    {
+      "name": "executive_summary",
+      "title": "Executive Summary",
+      "prompt": "Write a concise executive summary for {topic}. Highlight the key problems addressed and the value proposition.",
+      "children": []
+    },
+    {
+      "name": "introduction",
+      "title": "Introduction",
+      "prompt": "Write an engaging introduction about {topic}. Provide context and background for the reader.",
+      "children": []
+    },
+    {
+      "name": "market_landscape",
+      "title": "Market Landscape",
+      "prompt": "Describe the current market landscape for {topic}. Include trends, challenges, and opportunities.",
+      "children": [
+        {
+          "name": "market_trends",
+          "title": "Market Trends",
+          "prompt": "Analyze current trends in the market related to {topic}.",
+          "children": []
+        },
+        {
+          "name": "market_challenges",
+          "title": "Industry Challenges",
+          "prompt": "Describe the major challenges facing the industry that {topic} addresses.",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "problem_statement",
+      "title": "Problem Statement",
+      "prompt": "Clearly articulate the problems that {topic} solves. Focus on the pain points of the target audience.",
+      "children": []
+    },
+    {
+      "name": "solution_overview",
+      "title": "Solution Overview",
+      "prompt": "Provide a comprehensive overview of {topic} as a solution. Explain how it addresses the identified problems.",
+      "children": [
+        {
+          "name": "solution_features",
+          "title": "Key Features",
+          "prompt": "Describe the key features of {topic} that make it an effective solution.",
+          "children": []
+        },
+        {
+          "name": "solution_architecture",
+          "title": "Solution Architecture",
+          "prompt": "Provide a high-level description of the architecture or approach used in {topic}.",
+          "children": []
+        },
+        {
+          "name": "solution_differentiators",
+          "title": "Differentiators",
+          "prompt": "Explain what makes {topic} different from alternative solutions in the market.",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "benefits",
+      "title": "Benefits",
+      "prompt": "Describe the benefits of implementing {topic}. Include both business and technical benefits.",
+      "children": [
+        {
+          "name": "benefits_business",
+          "title": "Business Benefits",
+          "prompt": "Explain the business benefits of {topic}, including ROI, cost savings, and revenue opportunities.",
+          "children": []
+        },
+        {
+          "name": "benefits_technical",
+          "title": "Technical Benefits",
+          "prompt": "Describe the technical benefits of {topic}, such as scalability, reliability, and performance improvements.",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "case_studies",
+      "title": "Case Studies",
+      "prompt": "Provide hypothetical or real case studies that demonstrate the successful implementation of {topic}.",
+      "children": []
+    },
+    {
+      "name": "implementation",
+      "title": "Implementation Approach",
+      "prompt": "Describe a recommended approach for implementing {topic}. Include timelines, resources, and best practices.",
+      "children": [
+        {
+          "name": "implementation_timeline",
+          "title": "Implementation Timeline",
+          "prompt": "Suggest a typical timeline for implementing {topic}.",
+          "children": []
+        },
+        {
+          "name": "implementation_best_practices",
+          "title": "Best Practices",
+          "prompt": "Share best practices for a successful implementation of {topic}.",
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "roi_analysis",
+      "title": "ROI Analysis",
+      "prompt": "Provide a framework for analyzing the return on investment for {topic}. Include potential cost savings and revenue impacts.",
+      "children": []
+    },
+    {
+      "name": "conclusion",
+      "title": "Conclusion",
+      "prompt": "Write a compelling conclusion that summarizes the key points about {topic} and includes a clear call to action.",
+      "children": []
+    },
+    {
+      "name": "about_company",
+      "title": "About the Company",
+      "prompt": "Write a professional description of the company behind {topic}. Highlight relevant expertise and credibility.",
+      "children": []
+    }
+  ]
+} 
