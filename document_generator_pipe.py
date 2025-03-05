@@ -12,6 +12,7 @@ licence: MIT
 
 # TODO: document language
 # TODO: increment the timeout for generate_section
+# TODO: fix git retrival of templates
 
 #auto Todo:
 # - Add a "create_outline" action that creates an outline for the document
