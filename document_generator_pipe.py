@@ -12,6 +12,7 @@ licence: MIT
 
 # TODO: document language
 # TODO: fix git retrival of templates
+# TODO: add RAG to the document generator
 
 #auto Todo:
 # - Add a "create_outline" action that creates an outline for the document
