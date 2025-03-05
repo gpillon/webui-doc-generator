@@ -1871,7 +1871,7 @@ Where should this new section be placed in the document structure? Return the po
                         else:
                             output.append(f"{heading_prefix} {section['title']} (Updated)\n")
                     else:
-                        output.append(f"{heading_prefix} {section['title']} \u007b#{section['name']}\u007d\n")
+                        output.append(f"{heading_prefix} {section['title']} \u007b#{section['name']}\u007d\n\n")
                     
                     if section_type != "empty" and section_key in document["sections"]:
                         output.append(f"{document['sections'][section_key]}\n\n")
