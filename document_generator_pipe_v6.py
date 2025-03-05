@@ -10,9 +10,7 @@ version: 0.5.0
 licence: MIT
 """
 
-# TODO: document language
-# TODO: increment the timeout for generate_section
-
+# TODO: Wnen generating the sections, the outline should be passed to the prompt.
 #auto Todo:
 # - Add a "create_outline" action that creates an outline for the document
 # - Add a "create_summary" action that creates a summary for the document
@@ -836,17 +834,12 @@ Remember to choose from one of these actions: write_full_doc, edit_section, add_
             yield {"content": "[Table of Contents will be generated when displaying the document]", "status": "complete"}
             return
         
-        # Generate document structure for context
-        document_structure = self._generate_document_outline(section)
-        
         # Default case: "generate" - existing behavior
         prompt = section["prompt"].format(topic=topic)
         
-        # Append clear instructions to force paragraph-only output, now including document structure
+        # Append clear instructions to force paragraph-only output
         prompt += (
-            "\n\nHere is the document structure for context:\n"
-            f"{document_structure}\n\n"
-            "Please generate only plain text paragraphs without any markdown formatting. "
+            "\n\nPlease generate only plain text paragraphs without any markdown formatting. "
             "Do not include titles, headings, '#' symbols, or subsections. "
             "Do not include any other text, formatting, or comments. just the content for the section. "
             "The response should serve as the content for an already existing section of a markdown file on the topic: '{}'.".format(topic) +
@@ -865,131 +858,58 @@ Remember to choose from one of these actions: write_full_doc, edit_section, add_
         
         logger.info(f"Generating section with prompt: {prompt}")
 
-        # Set up timeout for the request
-        timeout = httpx.Timeout(self.valves.REQUEST_TIMEOUT, connect=5.0)
-        
-        # Add retry logic
-        max_retries = 2
-        for retry in range(max_retries + 1):  # +1 for the initial attempt
-            try:
-                async with client.stream(
-                    "POST",
-                    f"{self.valves.API_HOST}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=timeout
-                ) as response:
-                    if response.status_code != 200:
-                        error_text = await response.aread()
-                        error_message = f"API error ({response.status_code}): {error_text.decode('utf-8')}"
-                        logger.error(f"Section generation error (attempt {retry+1}): {error_message}")
-                        if retry < max_retries:
-                            logger.info(f"Retrying in 5 seconds... (attempt {retry+1}/{max_retries})")
-                            await asyncio.sleep(5)  # Wait 5 seconds before retry
-                            continue
-                        else:
-                            # All retries failed, yield empty content
-                            logger.warning(f"All retry attempts failed for section generation. Returning empty content.")
-                            yield {"content": "", "status": "complete"}
-                            return
+        try:
+            # Set up timeout for the request
+            timeout = httpx.Timeout(self.valves.REQUEST_TIMEOUT, connect=5.0)
+            
+            async with client.stream(
+                "POST",
+                f"{self.valves.API_HOST}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=timeout
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    error_message = f"API error ({response.status_code}): {error_text.decode('utf-8')}"
+                    logger.error(f"Section generation error: {error_message}")
+                    yield {"error": error_message}
+                    return
+                
+                # Stream the content
+                content_buffer = ""
+                async for chunk in response.aiter_bytes():
+                    if not chunk:
+                        continue
                     
-                    # Stream the content
-                    content_buffer = ""
-                    async for chunk in response.aiter_bytes():
-                        if not chunk:
-                            continue
-                        
-                        chunk_str = chunk.decode('utf-8')
-                        # Handle SSE format (data: prefix)
-                        for line in chunk_str.split('\n'):
-                            if line.startswith('data: ') and line != 'data: [DONE]':
-                                try:
-                                    data = json.loads(line[6:])
-                                    if 'choices' in data and len(data['choices']) > 0:
-                                        delta = data['choices'][0].get('delta', {})
-                                        if 'content' in delta:
-                                            content_piece = delta['content']
-                                            content_buffer += content_piece
-                                            # Yield each piece as it arrives
-                                            yield {"content_piece": content_piece}
-                                except json.JSONDecodeError as e:
-                                    logger.error(f"JSON parse error: {str(e)} for line: {line}")
-                    
-                    # Yield the final success status with complete content
-                    yield {"content": content_buffer, "status": "complete"}
-                    return  # Success, exit the retry loop
-                    
-            except httpx.TimeoutException:
-                error_message = f"Request timed out after {self.valves.REQUEST_TIMEOUT} seconds"
-                logger.error(f"Section generation timeout (attempt {retry+1}): {error_message}")
-                if retry < max_retries:
-                    logger.info(f"Retrying in 5 seconds... (attempt {retry+1}/{max_retries})")
-                    await asyncio.sleep(5)  # Wait 5 seconds before retry
-                else:
-                    # All retries failed, yield empty content
-                    logger.warning(f"All retry attempts failed due to timeout. Returning empty content.")
-                    yield {"content": "", "status": "complete"}
-            except Exception as e:
-                error_message = f"Exception: {str(e)}"
-                logger.error(f"Section generation exception (attempt {retry+1}): {error_message}")
-                if retry < max_retries:
-                    logger.info(f"Retrying in 5 seconds... (attempt {retry+1}/{max_retries})")
-                    await asyncio.sleep(5)  # Wait 5 seconds before retry
-                else:
-                    # All retries failed, yield empty content
-                    logger.warning(f"All retry attempts failed due to exception. Returning empty content.")
-                    yield {"content": "", "status": "complete"}
+                    chunk_str = chunk.decode('utf-8')
+                    # Handle SSE format (data: prefix)
+                    for line in chunk_str.split('\n'):
+                        if line.startswith('data: ') and line != 'data: [DONE]':
+                            try:
+                                data = json.loads(line[6:])
+                                if 'choices' in data and len(data['choices']) > 0:
+                                    delta = data['choices'][0].get('delta', {})
+                                    if 'content' in delta:
+                                        content_piece = delta['content']
+                                        content_buffer += content_piece
+                                        # Yield each piece as it arrives
+                                        yield {"content_piece": content_piece}
+                            except json.JSONDecodeError as e:
+                                logger.error(f"JSON parse error: {str(e)} for line: {line}")
+                
+                # Yield the final success status with complete content
+                yield {"content": content_buffer, "status": "complete"}
+                
+        except httpx.TimeoutException:
+            error_message = f"Request timed out after {self.valves.REQUEST_TIMEOUT} seconds"
+            logger.error(f"Section generation timeout: {error_message}")
+            yield {"error": error_message}
+        except Exception as e:
+            error_message = f"Exception: {str(e)}"
+            logger.error(f"Section generation exception: {error_message}")
+            yield {"error": error_message}
 
-    def _generate_document_outline(self, current_section):
-        """Generate markdown outline of the document structure."""
-        # Start with an empty outline
-        outline = []
-        
-        # Find the root template by traversing up the section hierarchy
-        root_sections = None
-        
-        # If we have a current document being generated
-        if hasattr(self, 'current_document') and self.current_document:
-            root_sections = self.current_document.get("template", {}).get("sections", [])
-        
-        # If no current document, use the current section to infer the template
-        if not root_sections:
-            # Find which template this section belongs to
-            for template_id, template in self.templates.items():
-                def find_in_sections(sections, section_name):
-                    for s in sections:
-                        if s["name"] == section_name:
-                            return True
-                        if "children" in s and s["children"]:
-                            if find_in_sections(s["children"], section_name):
-                                return True
-                    return False
-                
-                if find_in_sections(template["sections"], current_section["name"]):
-                    root_sections = template["sections"]
-                    break
-        
-        # If we still don't have root sections, use the current section as a standalone
-        if not root_sections:
-            outline.append(f"# {current_section['title']}")
-            return "\n".join(outline)
-        
-        # Generate the outline recursively
-        def build_outline(sections, level=1):
-            for section in sections:
-                # Add this section to the outline with appropriate heading level
-                prefix = "#" * level
-                outline.append(f"{prefix} {section['title']}")
-                
-                # Process children if any
-                if "children" in section and section["children"]:
-                    build_outline(section["children"], level + 1)
-        
-        # Build the complete outline
-        build_outline(root_sections)
-        
-        return "\n".join(outline)
-    
     async def edit_document_section(self, client, model_id, section_name, document, instructions, headers):
         """Edit an existing section of the document."""
         # Find the section in the document

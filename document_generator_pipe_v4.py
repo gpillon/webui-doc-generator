@@ -10,16 +10,9 @@ version: 0.5.0
 licence: MIT
 """
 
-# TODO: document language
-# TODO: increment the timeout for generate_section
-
-#auto Todo:
-# - Add a "create_outline" action that creates an outline for the document
-# - Add a "create_summary" action that creates a summary for the document
-# - Add a "create_toc" action that creates a table of contents for the document
-# - Add a "create_index" action that creates an index for the document
-# - Add a "create_bibliography" action that creates a bibliography for the document
-
+# TODO: Fixed section: alcune sezione possono essere fisse; in altri casi la sezione può essere fissa e vanno generati solo alcuni campi
+# TODO: generate TOC (indice)
+# TODO: Alcune sezioni possono contenere solo il titolo e basta, senza testo
 
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any, Union, Generator, Iterator
@@ -121,7 +114,7 @@ class Pipe:
         os.makedirs("/app/backend/data/doc_generator_pipe/git", exist_ok=True)
         os.makedirs("/app/backend/data/doc_generator_pipe/templates", exist_ok=True)
         
-        # Embedded templates with support for nested sections and section types
+        # Embedded templates with support for nested sections
         self.templates = {
             "basic": {
                 "name": "Basic Document",
@@ -131,27 +124,23 @@ class Pipe:
                         "name": "introduction",
                         "title": "Introduction",
                         "prompt": "Write an introduction about {topic}. Provide context and background.",
-                        "sectionType": "generate",
                         "children": []  # No children for this section
                     },
                     {
                         "name": "body",
                         "title": "Main Content",
                         "prompt": "Provide detailed information about {topic}. Include key facts, analysis, and insights.",
-                        "sectionType": "generate",
                         "children": [
                             {
                                 "name": "body_part1",
                                 "title": "Key Concepts",
                                 "prompt": "Explain the key concepts related to {topic}.",
-                                "sectionType": "generate",
                                 "children": []
                             },
                             {
                                 "name": "body_part2",
                                 "title": "Analysis",
                                 "prompt": "Provide analysis and interpretation of {topic}.",
-                                "sectionType": "generate",
                                 "children": []
                             }
                         ]
@@ -160,7 +149,6 @@ class Pipe:
                         "name": "conclusion",
                         "title": "Conclusion",
                         "prompt": "Write a conclusion summarizing the key points about {topic}.",
-                        "sectionType": "generate",
                         "children": []
                     }
                 ]
@@ -172,91 +160,37 @@ class Pipe:
                     {
                         "name": "abstract",
                         "title": "Abstract",
-                        "prompt": "Write a concise abstract for a research paper about {topic}.",
-                        "sectionType": "generate"
+                        "prompt": "Write a concise abstract for a research paper about {topic}."
                     },
                     {
                         "name": "introduction",
                         "title": "Introduction",
-                        "prompt": "Write an academic introduction for research on {topic}. Include research questions.",
-                        "sectionType": "generate"
+                        "prompt": "Write an academic introduction for research on {topic}. Include research questions."
                     },
                     {
                         "name": "literature",
                         "title": "Literature Review",
-                        "prompt": "Provide a literature review for research on {topic}. Reference key studies and findings.",
-                        "sectionType": "generate"
+                        "prompt": "Provide a literature review for research on {topic}. Reference key studies and findings."
                     },
                     {
                         "name": "methodology",
                         "title": "Methodology",
-                        "prompt": "Describe a research methodology for studying {topic}.",
-                        "sectionType": "generate"
+                        "prompt": "Describe a research methodology for studying {topic}."
                     },
                     {
                         "name": "results",
                         "title": "Results and Discussion",
-                        "prompt": "Present hypothetical results and discussion for research on {topic}.",
-                        "sectionType": "generate"
+                        "prompt": "Present hypothetical results and discussion for research on {topic}."
                     },
                     {
                         "name": "conclusion",
                         "title": "Conclusion",
-                        "prompt": "Write a conclusion for academic research on {topic}. Include limitations and future directions.",
-                        "sectionType": "generate"
+                        "prompt": "Write a conclusion for academic research on {topic}. Include limitations and future directions."
                     },
                     {
                         "name": "references",
                         "title": "References",
-                        "prompt": "Generate a sample reference list for research on {topic}. Use proper academic citation format.",
-                        "sectionType": "generate"
-                    }
-                ]
-            },
-            "advanced": {
-                "name": "Advanced Document with Special Sections",
-                "description": "Document with fixed, template, and generated sections",
-                "sections": [
-                    {
-                        "name": "introduction",
-                        "title": "Introduction",
-                        "prompt": "Write an introduction about {topic}. Provide context and background.",
-                        "sectionType": "generate",
-                        "children": []
-                    },
-                    {
-                        "name": "disclaimer",
-                        "title": "Disclaimer",
-                        "sectionType": "fixed",
-                        "template_text": "This document is for informational purposes only. The information provided is not legal or professional advice and should not be relied upon as such. Consult with appropriate experts before making decisions based on this content.",
-                        "children": []
-                    },
-                    {
-                        "name": "report_info",
-                        "title": "Report Information",
-                        "sectionType": "populate",
-                        "template_text": "Document ID: {doc_id}\nDate Generated: {date}\nAuthor: {author}\nVersion: {version}",
-                        "populateFields": [
-                            {"name": "doc_id", "prompt": "Generate a unique document ID for this report"},
-                            {"name": "date", "prompt": "Generate today's date in YYYY-MM-DD format"},
-                            {"name": "author", "prompt": "Generate an appropriate author name for a report on {topic}"},
-                            {"name": "version", "prompt": "Generate a version number for this document"}
-                        ],
-                        "children": []
-                    },
-                    {
-                        "name": "main_content",
-                        "title": "Main Content",
-                        "prompt": "Write detailed content about {topic}.",
-                        "sectionType": "generate",
-                        "children": []
-                    },
-                    {
-                        "name": "copyright",
-                        "title": "Copyright Notice",
-                        "sectionType": "fixed",
-                        "template_text": "© 2023 Document Generator. All rights reserved. No part of this document may be reproduced without permission.",
-                        "children": []
+                        "prompt": "Generate a sample reference list for research on {topic}. Use proper academic citation format."
                     }
                 ]
             },
@@ -267,49 +201,14 @@ class Pipe:
                      {
                         "name": "sample_section",
                         "title": "Sample Section",
-                        "prompt": "Generate a sample section for a document on {topic}.",
-                        "sectionType": "generate"
+                        "prompt": "Generate a sample section for a document on {topic}."
                     }
                 ]
-            },
-              "test_advanced_fields": {
-                "name": "Test Advanced Fields",
-                "description": "Test advanced fields",
-                "sections": [
-                    {
-                        "name": "introduction",
-                        "title": "Introduction",
-                        "prompt": "Write an introduction about {topic}. Provide context and background.",
-                        "sectionType": "generate",
-                        "children": []
-                    },
-                    {
-                        "name": "report_info",
-                        "title": "Report Information",
-                        "sectionType": "populate",
-                        "template_text": "Document ID: {doc_id}\nDate Generated: {date}\nAuthor: {author}\nVersion: {version}",
-                        "populateFields": [
-                            {"name": "doc_id", "prompt": "Generate a unique document ID for this report"},
-                            {"name": "date", "prompt": "Generate today's date in YYYY-MM-DD format"},
-                            {"name": "author", "prompt": "Generate an appropriate author name for a report on {topic}"},
-                            {"name": "version", "prompt": "Generate a version number for this document"}
-                        ],
-                        "children": []
-                    },
-                    {
-                        "name": "copyright",
-                        "title": "Copyright Notice",
-                        "sectionType": "fixed",
-                        "template_text": "© 2023 Document Generator. All rights reserved. No part of this document may be reproduced without permission.",
-                        "children": []
-                    }
-                ]
-            },
+            }
         }
         
         # Load templates from Git repositories
         self.load_git_templates()
-        self._load_local_templates()
 
         logger.info(f"Templates: {self.templates}")
         
@@ -338,7 +237,7 @@ class Pipe:
             },
             "summarize_doc": {
                 "description": "Summarize the existing document",
-                "requires": []
+                "requires": [{"name": "chat_id", "type": "string", "description": "The chat ID of the document"}]
             },
             "expand_section": {
                 "description": "Expand a specific section with more details",
@@ -371,29 +270,7 @@ class Pipe:
             "generate_template": {
                 "description": "Generate a document template from a markdown document",
                 "requires": [{"name": "markdown", "type": "string", "description": "Markdown document text to extract template from"}]
-            },
-            "print_document": {
-                "description": "Print the current document in its entirety.",
-                "patterns": [
-                    r"print(?:\s+the)?(?:\s+current)?(?:\s+document)",
-                    r"show(?:\s+the)?(?:\s+(?:full|entire|complete|current))?(?:\s+document)",
-                    r"display(?:\s+the)?(?:\s+(?:full|entire|complete|current))?(?:\s+document)"
-                ],
-                "requires": []
-            },
-            "delete_template": {
-                "description": "Delete a document template",
-                "requires": [{"name": "template_id", "type": "string", "description": "The ID of the template to delete"}]
-            },
-            "get_template_json": {
-                "description": "Get the JSON structure of a document template",
-                "requires": [{"name": "template_id", "type": "string", "description": "The ID of the template to retrieve"}]
-            },
-            "update_template": {
-                "description": "Update a template with the provided JSON",
-                "requires": [{"name": "template_id", "type": "string", "description": "The ID of the template to update"},
-                             {"name": "template_json", "type": "string", "description": "The JSON structure for the template"}]
-            },
+            }
         }
 
     def pipes(self):
@@ -402,20 +279,13 @@ class Pipe:
         options = []
         
         for model in models:
-           model_id = model.strip()
-           options.append({
-                    "id": f"{model_id}:Document Generator",
-                    "name": f"{model_id} - Document Generator",
+            model_id = model.strip()
+            for template_id, template in self.templates.items():
+                options.append({
+                    "id": f"{model_id}:{template_id}",
+                    "name": f"{model_id} - {template['name']}",
                 })
-        #     
-        #     for template_id, template in self.templates.items():
-        #         options.append({
-        #             "id": f"{model_id}:{template_id}",
-        #             "name": f"{model_id} - {template['name']}",
-        #         })
         
-
-
         return options
 
     async def detect_action(self, client, user_message, headers=None):
@@ -479,7 +349,6 @@ class Pipe:
             expand_patterns = ["expand", "elaborate", "more details", "extend"]
             rewrite_patterns = ["rewrite", "rephrase", "different style", "new style"]
             outline_patterns = ["outline", "structure", "framework", "plan"]
-            # outline_patterns = ["outline", "structure", "framework", "plan"]
             
             user_message_lower = user_message.lower()
             
@@ -765,88 +634,11 @@ Remember to choose from one of these actions: write_full_doc, edit_section, add_
         
     async def generate_section(self, client, model_id, section, topic, headers):
         """Generate a single section using the API with streaming."""
-        section_type = section.get("sectionType", "generate")
-        
-        if section_type == "fixed":
-            # For fixed sections, just return the template text directly
-            fixed_content = section.get("template_text", "")
-            yield {"content": fixed_content, "status": "complete"}
-            return
-        
-        elif section_type == "populate":
-            # For populate sections, we need to generate values for each field
-            template_text = section.get("template_text", "")
-            populated_content = template_text
-            
-            # Generate values for each field in populateFields
-            for field in section.get("populateFields", []):
-                field_name = field.get("name", "")
-                field_prompt = field.get("prompt", "").format(topic=topic)
-                
-                # Append clear instructions for field generation
-                field_prompt += (
-                    "\n\nPlease generate only plain text content without any markdown formatting. "
-                    "The response should be very concise and to the point."
-                )
-                
-                # Generate the field value
-                field_value = ""
-                try:
-                    payload = {
-                        "model": model_id,
-                        "messages": [{"role": "user", "content": field_prompt}],
-                        "temperature": self.valves.TEMPERATURE,
-                        "max_tokens": min(200, self.valves.MAX_TOKENS),  # Keep field values short
-                        "stream": False,  # No streaming for field values
-                    }
-                    
-                    response = await client.post(
-                        f"{self.valves.API_HOST}/chat/completions",
-                        json=payload,
-                        headers=headers,
-                        timeout=self.valves.REQUEST_TIMEOUT
-                    )
-                    
-                    response.raise_for_status()
-                    response_data = response.json()
-                    field_value = response_data.get("choices", [])[0].get("message", {}).get("content", "").strip()
-                    
-                    # Replace the field marker in the template text
-                    populated_content = populated_content.replace(f"{{{field_name}}}", field_value)
-                    
-                    # Yield progress for each field
-                    yield {"content_piece": f"Generated value for {field_name}: {field_value}\n"}
-                    
-                except Exception as e:
-                    logger.error(f"Error generating field {field_name}: {str(e)}")
-                    populated_content = populated_content.replace(f"{{{field_name}}}", f"[Error generating {field_name}]")
-            
-            # Return the fully populated content
-            yield {"content": populated_content, "status": "complete"}
-            return
-        
-        elif section_type == "empty":
-            # For empty sections, return empty content
-            yield {"content": "", "status": "complete"}
-            return
-            
-        elif section_type == "toc":
-            # For TOC sections, we'll generate the actual TOC during document formatting
-            # Just provide a placeholder here
-            yield {"content": "[Table of Contents will be generated when displaying the document]", "status": "complete"}
-            return
-        
-        # Generate document structure for context
-        document_structure = self._generate_document_outline(section)
-        
-        # Default case: "generate" - existing behavior
         prompt = section["prompt"].format(topic=topic)
         
-        # Append clear instructions to force paragraph-only output, now including document structure
+        # Append clear instructions to force paragraph-only output
         prompt += (
-            "\n\nHere is the document structure for context:\n"
-            f"{document_structure}\n\n"
-            "Please generate only plain text paragraphs without any markdown formatting. "
+            "\n\nPlease generate only plain text paragraphs without any markdown formatting. "
             "Do not include titles, headings, '#' symbols, or subsections. "
             "Do not include any other text, formatting, or comments. just the content for the section. "
             "The response should serve as the content for an already existing section of a markdown file on the topic: '{}'.".format(topic) +
@@ -865,131 +657,58 @@ Remember to choose from one of these actions: write_full_doc, edit_section, add_
         
         logger.info(f"Generating section with prompt: {prompt}")
 
-        # Set up timeout for the request
-        timeout = httpx.Timeout(self.valves.REQUEST_TIMEOUT, connect=5.0)
-        
-        # Add retry logic
-        max_retries = 2
-        for retry in range(max_retries + 1):  # +1 for the initial attempt
-            try:
-                async with client.stream(
-                    "POST",
-                    f"{self.valves.API_HOST}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=timeout
-                ) as response:
-                    if response.status_code != 200:
-                        error_text = await response.aread()
-                        error_message = f"API error ({response.status_code}): {error_text.decode('utf-8')}"
-                        logger.error(f"Section generation error (attempt {retry+1}): {error_message}")
-                        if retry < max_retries:
-                            logger.info(f"Retrying in 5 seconds... (attempt {retry+1}/{max_retries})")
-                            await asyncio.sleep(5)  # Wait 5 seconds before retry
-                            continue
-                        else:
-                            # All retries failed, yield empty content
-                            logger.warning(f"All retry attempts failed for section generation. Returning empty content.")
-                            yield {"content": "", "status": "complete"}
-                            return
+        try:
+            # Set up timeout for the request
+            timeout = httpx.Timeout(self.valves.REQUEST_TIMEOUT, connect=5.0)
+            
+            async with client.stream(
+                "POST",
+                f"{self.valves.API_HOST}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=timeout
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    error_message = f"API error ({response.status_code}): {error_text.decode('utf-8')}"
+                    logger.error(f"Section generation error: {error_message}")
+                    yield {"error": error_message}
+                    return
+                
+                # Stream the content
+                content_buffer = ""
+                async for chunk in response.aiter_bytes():
+                    if not chunk:
+                        continue
                     
-                    # Stream the content
-                    content_buffer = ""
-                    async for chunk in response.aiter_bytes():
-                        if not chunk:
-                            continue
-                        
-                        chunk_str = chunk.decode('utf-8')
-                        # Handle SSE format (data: prefix)
-                        for line in chunk_str.split('\n'):
-                            if line.startswith('data: ') and line != 'data: [DONE]':
-                                try:
-                                    data = json.loads(line[6:])
-                                    if 'choices' in data and len(data['choices']) > 0:
-                                        delta = data['choices'][0].get('delta', {})
-                                        if 'content' in delta:
-                                            content_piece = delta['content']
-                                            content_buffer += content_piece
-                                            # Yield each piece as it arrives
-                                            yield {"content_piece": content_piece}
-                                except json.JSONDecodeError as e:
-                                    logger.error(f"JSON parse error: {str(e)} for line: {line}")
-                    
-                    # Yield the final success status with complete content
-                    yield {"content": content_buffer, "status": "complete"}
-                    return  # Success, exit the retry loop
-                    
-            except httpx.TimeoutException:
-                error_message = f"Request timed out after {self.valves.REQUEST_TIMEOUT} seconds"
-                logger.error(f"Section generation timeout (attempt {retry+1}): {error_message}")
-                if retry < max_retries:
-                    logger.info(f"Retrying in 5 seconds... (attempt {retry+1}/{max_retries})")
-                    await asyncio.sleep(5)  # Wait 5 seconds before retry
-                else:
-                    # All retries failed, yield empty content
-                    logger.warning(f"All retry attempts failed due to timeout. Returning empty content.")
-                    yield {"content": "", "status": "complete"}
-            except Exception as e:
-                error_message = f"Exception: {str(e)}"
-                logger.error(f"Section generation exception (attempt {retry+1}): {error_message}")
-                if retry < max_retries:
-                    logger.info(f"Retrying in 5 seconds... (attempt {retry+1}/{max_retries})")
-                    await asyncio.sleep(5)  # Wait 5 seconds before retry
-                else:
-                    # All retries failed, yield empty content
-                    logger.warning(f"All retry attempts failed due to exception. Returning empty content.")
-                    yield {"content": "", "status": "complete"}
+                    chunk_str = chunk.decode('utf-8')
+                    # Handle SSE format (data: prefix)
+                    for line in chunk_str.split('\n'):
+                        if line.startswith('data: ') and line != 'data: [DONE]':
+                            try:
+                                data = json.loads(line[6:])
+                                if 'choices' in data and len(data['choices']) > 0:
+                                    delta = data['choices'][0].get('delta', {})
+                                    if 'content' in delta:
+                                        content_piece = delta['content']
+                                        content_buffer += content_piece
+                                        # Yield each piece as it arrives
+                                        yield {"content_piece": content_piece}
+                            except json.JSONDecodeError as e:
+                                logger.error(f"JSON parse error: {str(e)} for line: {line}")
+                
+                # Yield the final success status with complete content
+                yield {"content": content_buffer, "status": "complete"}
+                
+        except httpx.TimeoutException:
+            error_message = f"Request timed out after {self.valves.REQUEST_TIMEOUT} seconds"
+            logger.error(f"Section generation timeout: {error_message}")
+            yield {"error": error_message}
+        except Exception as e:
+            error_message = f"Exception: {str(e)}"
+            logger.error(f"Section generation exception: {error_message}")
+            yield {"error": error_message}
 
-    def _generate_document_outline(self, current_section):
-        """Generate markdown outline of the document structure."""
-        # Start with an empty outline
-        outline = []
-        
-        # Find the root template by traversing up the section hierarchy
-        root_sections = None
-        
-        # If we have a current document being generated
-        if hasattr(self, 'current_document') and self.current_document:
-            root_sections = self.current_document.get("template", {}).get("sections", [])
-        
-        # If no current document, use the current section to infer the template
-        if not root_sections:
-            # Find which template this section belongs to
-            for template_id, template in self.templates.items():
-                def find_in_sections(sections, section_name):
-                    for s in sections:
-                        if s["name"] == section_name:
-                            return True
-                        if "children" in s and s["children"]:
-                            if find_in_sections(s["children"], section_name):
-                                return True
-                    return False
-                
-                if find_in_sections(template["sections"], current_section["name"]):
-                    root_sections = template["sections"]
-                    break
-        
-        # If we still don't have root sections, use the current section as a standalone
-        if not root_sections:
-            outline.append(f"# {current_section['title']}")
-            return "\n".join(outline)
-        
-        # Generate the outline recursively
-        def build_outline(sections, level=1):
-            for section in sections:
-                # Add this section to the outline with appropriate heading level
-                prefix = "#" * level
-                outline.append(f"{prefix} {section['title']}")
-                
-                # Process children if any
-                if "children" in section and section["children"]:
-                    build_outline(section["children"], level + 1)
-        
-        # Build the complete outline
-        build_outline(root_sections)
-        
-        return "\n".join(outline)
-    
     async def edit_document_section(self, client, model_id, section_name, document, instructions, headers):
         """Edit an existing section of the document."""
         # Find the section in the document
@@ -1293,18 +1012,6 @@ Remember to choose from one of these actions: write_full_doc, edit_section, add_
                         yield chunk
                 elif action == "generate_template":
                     async for chunk in self.generate_template_from_markdown(client, user_message, headers):
-                        yield chunk
-                elif action == "print_document":
-                    async for chunk in self.handle_print_document(chat_id):
-                        yield chunk
-                elif action == "delete_template":
-                    async for chunk in self.handle_delete_template(params):
-                        yield chunk
-                elif action == "get_template_json":
-                    async for chunk in self.handle_get_template_json(params):
-                        yield chunk
-                elif action == "update_template":
-                    async for chunk in self.handle_update_template(params):
                         yield chunk
                 else:
                     # Default case - unrecognized action, show help instead
@@ -1810,70 +1517,19 @@ Where should this new section be placed in the document structure? Return the po
         else:
             output.append(f"# Generated Document\n")
         
-        # Generate table of contents data structure for TOC sections
-        toc_entries = []
-        
-        def collect_toc_entries(sections, indent=0):
-            entries = []
-            for section in sections:
-                # Skip TOC sections themselves from the TOC
-                if section.get("sectionType") == "toc":
-                    continue
-                    
-                entries.append({
-                    "title": section["title"],
-                    "name": section["name"],
-                    "indent": indent
-                })
-                
-                if "children" in section and section["children"]:
-                    entries.extend(collect_toc_entries(section["children"], indent + 1))
-            return entries
-            
-        toc_entries = collect_toc_entries(document["template"]["sections"])
-        
         # Helper function to recursively format sections
         def format_section(section, level=2):
             section_key = section["name"]
             heading_prefix = "#" * level
-            section_type = section.get("sectionType", "generate")
             
-            if section_key in document["sections"] or section_type in ["empty", "toc"]:
-                # Handle different section types
-                if section_type == "toc":
-                    # Generate table of contents
-                    if section_key == highlight_section:
-                        output.append(f"{heading_prefix} {section['title']} (Table of Contents - Updated)\n")
-                    else:
-                        output.append(f"{heading_prefix} {section['title']} \u007b#{section['name']}\u007d\n")
-                    
-                    # Generate TOC entries as markdown links
-                    for entry in toc_entries:
-                        # indent = "  " * entry["indent"]
-                        # output.append(f"{indent}- [{entry['title']}](#{entry['name']})\n")
-                        output.append(f"[{entry['title']}](#{entry['name']})\n")
-                    
-                    output.append("\n")
-                elif section_type == "empty":
-                    # Just add the heading for empty sections, no content
-                    if section_key == highlight_section:
-                        output.append(f"{heading_prefix} {section['title']} (Empty Section - Updated)\n\n")
-                    else:
-                        output.append(f"{heading_prefix} {section['title']} \u007b#{section['name']}\u007d\n\n")
+            if section_key in document["sections"]:
+                # Highlight the edited section if specified
+                if section_key == highlight_section:
+                    output.append(f"{heading_prefix} {section['title']} (Updated)\n")
                 else:
-                    # Handle regular, fixed and populate sections
-                    if section_key == highlight_section:
-                        if section_type == "fixed":
-                            output.append(f"{heading_prefix} {section['title']} (Fixed Section - Updated)\n")
-                        elif section_type == "populate":
-                            output.append(f"{heading_prefix} {section['title']} (Template Section - Updated)\n")
-                        else:
-                            output.append(f"{heading_prefix} {section['title']} (Updated)\n")
-                    else:
-                        output.append(f"{heading_prefix} {section['title']} \u007b#{section['name']}\u007d\n")
-                    
-                    if section_type != "empty" and section_key in document["sections"]:
-                        output.append(f"{document['sections'][section_key]}\n\n")
+                    output.append(f"{heading_prefix} {section['title']}\n")
+                
+                output.append(f"{document['sections'][section_key]}\n\n")
                 
                 # Process child sections if any
                 if "children" in section and section["children"]:
@@ -2054,8 +1710,7 @@ Where should this new section be placed in the document structure? Return the po
 
     def load_git_templates(self):
         """Load additional templates from specified Git repositories."""
-
-        logger.info("Loading templates from Git repositories, {}".format(self.valves.GIT_TEMPLATE_REPOS))
+        logger.info("Loading templates from Git repositories")
         
         # Process the comma-separated list of repositories
         if not self.valves.GIT_TEMPLATE_REPOS or self.valves.GIT_TEMPLATE_REPOS.strip() == "":
@@ -2082,6 +1737,7 @@ Where should this new section be placed in the document structure? Return the po
                 logger.error(f"Error processing Git repository {repo_url}: {str(e)}")
         
         # Load templates from local template directory
+        self._load_local_templates()
     
     def _get_repo_name(self, repo_url):
         """Extract repository name from URL."""
@@ -2264,18 +1920,9 @@ Follow the guidelines exactly and provide only the requested JSON output."""
                 output.append("**Example:** _Summarize my current document_\n\n")
             elif action_name == "get_all_templates":
                 output.append("**Example:** _Show me all available document templates_\n\n")
-            elif action_name == "generate_template":
-                output.append("**Example:** _Generate a template from this markdown document:_\n\n")
-                output.append("```markdown\n# Introduction\nThis is an introduction to my topic.\n\n# {{fixed}} Terms and Definitions\nThese terms will remain the same in all documents.\n\n# {{populate:[{\"name\":\"date\",\"prompt\":\"Generate today's date\"},{\"name\":\"author\",\"prompt\":\"Generate an author name\"}]}} Report Information\nDate: {date}\nAuthor: {author}\n\n# {{toc}} Table of Contents\n\n# {{empty}} Empty Section\nThis section will be empty.\n\n # Analysis\nThis section will be generated dynamically.\n```\n\n")
-                output.append("**Section Types:**\n")
-                output.append("- Regular sections (no tag): Content is generated dynamically\n")
-                output.append("- Fixed sections (`{{fixed}}`): Content is used as-is without changes\n")
-                output.append("- Template sections (`{{populate:[fields]}}`): Content with placeholders that get populated\n")
-                output.append("- TOC sections (`{{toc}}`): Generates a table of contents for the document\n")
-                output.append("- Empty sections (`{{empty}}`): Generates a section with no content\n")
             else:
                 output.append("\n")
-                    
+                
         yield "\n".join(output)
     
     async def handle_get_all_templates(self):
@@ -2299,16 +1946,7 @@ Follow the guidelines exactly and provide only the requested JSON output."""
                 section_list = []
                 for section in sections:
                     indent_str = "  " * indent
-                    section_type = section.get("sectionType", "generate")
-                    
-                    if section_type == "fixed":
-                        section_list.append(f"{indent_str}- {section['title']} (Fixed Section)")
-                    elif section_type == "populate":
-                        fields = [f['name'] for f in section.get('populateFields', [])]
-                        fields_str = ", ".join(fields) if fields else "none"
-                        section_list.append(f"{indent_str}- {section['title']} (Template with fields: {fields_str})")
-                    else:
-                        section_list.append(f"{indent_str}- {section['title']}")
+                    section_list.append(f"{indent_str}- {section['title']}")
                     
                     if "children" in section and section["children"]:
                         child_sections = format_template_sections(section["children"], indent + 1)
@@ -2321,10 +1959,6 @@ Follow the guidelines exactly and provide only the requested JSON output."""
             output.append("\n")
             
         output.append("To use a specific template, request: _Write a document about [topic] using the [template_id] template_\n")
-        output.append("\n**Special Section Types:**\n")
-        output.append("- Regular sections are dynamically generated based on the topic\n")
-        output.append("- Fixed sections use predefined content that doesn't change\n")
-        output.append("- Template sections have placeholders that get populated with generated content\n")
         
         yield "\n".join(output)
         
@@ -2356,49 +1990,8 @@ Follow the guidelines exactly and provide only the requested JSON output."""
         current_sections = {0: None}  # Track current section at each level
         section_content = {}
         
-        current_section_type = "generate"  # Default section type
-        current_section_populate_fields = []
-        
         for line in markdown_lines:
-            # Check for section type tags at the beginning of headings
             if line.startswith('#'):
-                logger.info(f"Processing line: {line}")
-                section_type_match = re.match(r'#+\s*(\{\{.*?\}\})\s*(.*)', line)
-                logger.info(f"Section type match: {section_type_match}")
-                if section_type_match:
-                    tag = section_type_match.group(1)
-                    title = section_type_match.group(2)
-                    
-                    # Parse the section type from the tag
-                    if tag == "{{fixed}}":
-                        current_section_type = "fixed"
-                        current_section_populate_fields = []
-                    elif tag == "{{empty}}":
-                        current_section_type = "empty"
-                        current_section_populate_fields = []
-                    elif tag == "{{toc}}":
-                        current_section_type = "toc"
-                        current_section_populate_fields = []
-                    elif tag.startswith("{{populate:"):
-                        current_section_type = "populate"
-                        # Extract the populate fields JSON from the tag
-                        try:
-                            fields_json = tag[11:-2].strip()  # Remove {{populate: and }}
-                            current_section_populate_fields = json.loads(fields_json)
-                        except Exception as e:
-                            logger.error(f"Error parsing populate fields: {str(e)}")
-                            current_section_populate_fields = []
-                            yield f"Warning: Error parsing populate fields in '{title}' - defaulting to empty fields.\n"
-                    else:
-                        current_section_type = "generate"
-                        current_section_populate_fields = []
-                    
-                    # Remove the tag from the line for further processing
-                    line = f"# {title}"
-                else:
-                    current_section_type = "generate"  # Default if no tag specified
-                    current_section_populate_fields = []
-                    
                 # Count the level of the heading
                 level = 0
                 for char in line:
@@ -2426,17 +2019,11 @@ Follow the guidelines exactly and provide only the requested JSON output."""
                     'name': section_name,
                     'title': title,
                     'prompt': '',  # Will be filled in later
-                    'sectionType': current_section_type,
                     'children': []
                 }
                 
-                # Add populate fields if applicable
-                if current_section_type == "populate":
-                    new_section['populateFields'] = current_section_populate_fields
-                
                 # Reset content collection for this section
                 section_content[section_name] = []
-                current_section_name = section_name
                 
                 # Add the section to the appropriate parent based on level
                 if level == 1:
@@ -2481,89 +2068,75 @@ Follow the guidelines exactly and provide only the requested JSON output."""
         collect_sections(section_tree)
         
         yield f"Extracted {len(all_sections)} sections from the document.\n"
+        yield "Generating prompts for each section using the thinking model...\n"
         
-        # Process sections based on their type
+        # Generate prompts for each section using the thinking model
         for section in all_sections:
             section_name = section['name']
             section_title = section['title']
             content = "\n".join(section_content.get(section_name, []))
-            section_type = section.get('sectionType', 'generate')
             
-            if section_type == "fixed":
-                # For fixed sections, store the content as template_text
-                section['template_text'] = content
-                section['prompt'] = f"Fixed section: {section_title}"
-                yield f"Configured fixed section: '{section_title}'\n"
-                
-            elif section_type == "populate":
-                # For populate sections, store content as template with placeholders
-                section['template_text'] = content
-                # Generate a basic prompt in case it's needed
-                section['prompt'] = f"Populate template for {section_title} with field values"
-                yield f"Configured populate section: '{section_title}' with {len(section.get('populateFields', []))} fields\n"
-                
-            else:  # generate type (default)
-                # Skip sections with no content if they have children
-                if not content.strip() and section['children']:
-                    # Set a basic prompt for parent sections
-                    section['prompt'] = f"Provide information about {{topic}} related to {section_title}."
-                    continue
-                    
-                # Use thinking model to generate a prompt based on the content
-                system_prompt = """You are an AI assistant creating document templates.
+            # Skip sections with no content if they have children
+            if not content.strip() and section['children']:
+                # Set a basic prompt for parent sections
+                section['prompt'] = f"Provide information about {{topic}} related to {section_title}."
+                continue
+            
+            # Use thinking model to generate a prompt based on the content
+            system_prompt = """You are an AI assistant creating document templates.
 Given a section title and sample content, create a concise prompt (25-40 words) that would guide an AI to generate similar content.
 The prompt must include a {topic} placeholder and be specific enough to guide content generation for this particular section."""
 
-                user_prompt = f"""Section title: {section_title}
-                
+            user_prompt = f"""Section title: {section_title}
+            
 Sample content (may be empty):
 {content}
 
 Create a brief, focused prompt for this section that would work for any topic."""
 
-                payload = {
-                    "model": self.valves.THINKING_MODEL_ID,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    "temperature": 0.3
-                }
+            payload = {
+                "model": self.valves.THINKING_MODEL_ID,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.3
+            }
+            
+            try:
+                response = await client.post(
+                    f"{self.valves.THINKING_API_HOST}/chat/completions",
+                    headers=self._get_api_headers(self.valves.THINKING_API_KEY or self.valves.API_KEY),
+                    json=payload,
+                    timeout=30
+                )
                 
-                try:
-                    response = await client.post(
-                        f"{self.valves.THINKING_API_HOST}/chat/completions",
-                        headers=self._get_api_headers(self.valves.THINKING_API_KEY or self.valves.API_KEY),
-                        json=payload,
-                        timeout=30
-                    )
-                    
-                    response.raise_for_status()
-                    response_data = response.json()
-                    
-                    # Extract prompt from assistant's message
-                    prompt = response_data.get("choices", [])[0].get("message", {}).get("content", "")
-                    
-                    # Clean the prompt
-                    prompt = prompt.strip().replace('```', '').strip()
-                    if prompt.startswith('"') and prompt.endswith('"'):
-                        prompt = prompt[1:-1].strip()
-                    
-                    # Ensure the prompt contains {topic}
-                    if "{topic}" not in prompt:
-                        prompt = f"Discuss {section_title.lower()} for {{topic}}."
-                    
-                    # Ensure the prompt ends with a period
-                    if not prompt.endswith('.'):
-                        prompt += '.'
-                    
-                    section['prompt'] = prompt
-                    yield f"Generated prompt for '{section_title}: {prompt}'\n"
-                    
-                except Exception as e:
-                    logger.error(f"Error generating prompt for section {section_name}: {str(e)}")
-                    section['prompt'] = f"Explain {section_title.lower()} for {{topic}}."
-                    yield f"Error generating prompt for '{section_title}': {str(e)}\n"
+                response.raise_for_status()
+                response_data = response.json()
+                
+                # Extract prompt from assistant's message
+                prompt = response_data.get("choices", [])[0].get("message", {}).get("content", "")
+                
+                # Clean the prompt
+                prompt = prompt.strip().replace('```', '').strip()
+                if prompt.startswith('"') and prompt.endswith('"'):
+                    prompt = prompt[1:-1].strip()
+                
+                # Ensure the prompt contains {topic}
+                if "{topic}" not in prompt:
+                    prompt = f"Discuss {section_title.lower()} for {{topic}}."
+                
+                # Ensure the prompt ends with a period
+                if not prompt.endswith('.'):
+                    prompt += '.'
+                
+                section['prompt'] = prompt
+                yield f"Generated prompt for '{section_title}: {prompt}'\n"
+                
+            except Exception as e:
+                logger.error(f"Error generating prompt for section {section_name}: {str(e)}")
+                section['prompt'] = f"Explain {section_title.lower()} for {{topic}}."
+                yield f"Error generating prompt for '{section_title}': {str(e)}\n"
         
         # Generate template metadata
         yield "Generating template metadata...\n"
@@ -2710,197 +2283,3 @@ Create a name and description for this document template. Return only JSON."""
             "HTTP-Referer": "https://openwebui.com/",
             "X-Title": "Open WebUI",
         }
-
-    async def handle_print_document(self, chat_id):
-        """Handle printing the current document in its entirety."""
-        # Check if we have a document
-        if chat_id not in self.documents:
-            yield "No document found. Please generate a document first."
-            yield "</think>\n\n"
-            yield "# No Document Found\n\nI couldn't find any document in the current chat. Please create a document first using the 'write_full_doc' action."
-            return
-        
-        document = self.documents[chat_id]
-        
-        yield f"Retrieving document on topic: {document.get('topic', 'Untitled')}\n"
-        
-        # End thinking
-        yield "</think>\n\n"
-        
-        # Format and display the entire document with metadata
-        yield self.format_document(document, include_metadata=True)
-
-    async def handle_delete_template(self, params):
-        """Handle deleting a template."""
-        template_id = params.get("template_id", "")
-        
-        yield f"Attempting to delete template: {template_id}...\n"
-        
-        # Check if template exists
-        if template_id not in self.templates:
-            yield f"Error: Template '{template_id}' not found.\n"
-            yield "</think>\n\n"
-            yield f"# Template Not Found\n\nNo template with ID '{template_id}' was found in the system."
-            return
-        
-        # Check if it's a built-in template
-        builtin_templates = ["basic", "research", "advanced", "custom"]
-        if template_id in builtin_templates:
-            yield f"Error: Cannot delete built-in template '{template_id}'.\n"
-            yield "</think>\n\n"
-            yield f"# Cannot Delete Built-in Template\n\nThe template '{template_id}' is a built-in template and cannot be deleted. You can only delete custom templates."
-            return
-        
-        # Get template info for later use
-        template_name = self.templates[template_id].get("name", template_id)
-        
-        # Try to delete the file if it exists
-        file_deleted = False
-        template_files = glob.glob(f"/app/backend/data/doc_generator_pipe/templates/{template_id}.json")
-        for file_path in template_files:
-            try:
-                os.remove(file_path)
-                file_deleted = True
-                yield f"Deleted template file: {file_path}\n"
-            except Exception as e:
-                yield f"Warning: Failed to delete template file {file_path}: {str(e)}\n"
-        
-        # Remove from memory
-        try:
-            del self.templates[template_id]
-            yield f"Removed template '{template_id}' from memory.\n"
-            yield "</think>\n\n"
-            yield f"# Template Deleted\n\nThe template '{template_name}' (ID: {template_id}) has been successfully deleted."
-            if file_deleted:
-                yield f"\n\nThe template file has also been removed from storage."
-        except Exception as e:
-            yield f"Error removing template from memory: {str(e)}\n"
-            yield "</think>\n\n"
-            yield f"# Template Deletion Error\n\nAn error occurred while deleting the template '{template_name}' (ID: {template_id}): {str(e)}"
-    
-    async def handle_get_template_json(self, params):
-        """Handle getting a template's JSON structure."""
-        template_id = params.get("template_id", "")
-        
-        yield f"Retrieving JSON for template: {template_id}...\n"
-        
-        # Check if template exists
-        if template_id not in self.templates:
-            yield f"Error: Template '{template_id}' not found.\n"
-            yield "</think>\n\n"
-            yield f"# Template Not Found\n\nNo template with ID '{template_id}' was found in the system."
-            return
-        
-        # Get the template and format as pretty JSON
-        template = self.templates[template_id]
-        template_json = json.dumps(template, indent=2)
-        
-        yield f"Successfully retrieved template JSON for '{template_id}'.\n"
-        yield "</think>\n\n"
-        
-        # Return template information and JSON
-        yield f"# Template: {template['name']} (ID: {template_id})\n\n"
-        if "description" in template:
-            yield f"{template['description']}\n\n"
-        
-        yield "## Template JSON Structure\n\n"
-        yield f"```json\n{template_json}\n```\n\n"
-        yield "You can use this JSON to inspect the template structure or as a basis for creating a new template."
-    
-    async def handle_update_template(self, params):
-        """Handle updating a template with provided JSON."""
-        template_id = params.get("template_id", "")
-        template_json_str = params.get("template_json", "")
-        
-        yield f"Attempting to update template: {template_id}...\n"
-        
-        # Check if template exists
-        if template_id not in self.templates:
-            yield f"Template '{template_id}' does not exist. This will create a new template.\n"
-        
-        # Validate JSON
-        try:
-            # Try to extract JSON if it's embedded in a code block or other text
-            if "```json" in template_json_str:
-                json_match = re.search(r'```json\s*(.*?)\s*```', template_json_str, re.DOTALL)
-                if json_match:
-                    template_json_str = json_match.group(1)
-            elif "```" in template_json_str:
-                json_match = re.search(r'```\s*(.*?)\s*```', template_json_str, re.DOTALL)
-                if json_match:
-                    template_json_str = json_match.group(1)
-            
-            template_data = json.loads(template_json_str)
-            
-            # Validate required fields
-            if not isinstance(template_data, dict):
-                raise ValueError("Template must be a JSON object")
-            
-            if "name" not in template_data:
-                raise ValueError("Template must have a 'name' field")
-            
-            if "sections" not in template_data:
-                raise ValueError("Template must have a 'sections' field")
-            
-            if not isinstance(template_data["sections"], list):
-                raise ValueError("Template 'sections' must be an array")
-            
-            # Validate each section has required fields
-            for section in template_data["sections"]:
-                if "name" not in section:
-                    raise ValueError("Each section must have a 'name' field")
-                if "title" not in section:
-                    raise ValueError("Each section must have a 'title' field")
-            
-            # Check if it's a built-in template
-            builtin_templates = ["basic", "research", "advanced", "custom", "test_advanced_fields"]
-            if template_id in builtin_templates:
-                yield f"Warning: Updating built-in template '{template_id}'. This will be kept in memory but not saved permanently.\n"
-            
-            # Update template in memory
-            self.templates[template_id] = template_data
-            yield f"Updated template '{template_id}' in memory.\n"
-            
-            # Try to save to file if it's not a built-in template
-            if template_id not in builtin_templates:
-                try:
-                    file_path = f"/app/backend/data/doc_generator_pipe/templates/{template_id}.json"
-                    
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        json.dump(template_data, f, ensure_ascii=False, indent=2)
-                    
-                    yield f"Saved template to file: {file_path}\n"
-                except Exception as e:
-                    yield f"Warning: Failed to save template to file: {str(e)}\n"
-            
-            yield "</think>\n\n"
-            
-            # Return success message
-            yield f"# Template Updated Successfully\n\n"
-            yield f"The template '{template_data['name']}' (ID: {template_id}) has been updated.\n\n"
-            
-            # Include summary of template
-            yield f"## Template Summary\n\n"
-            yield f"**Name:** {template_data['name']}\n"
-            if "description" in template_data:
-                yield f"**Description:** {template_data['description']}\n"
-            
-            yield f"**Number of Sections:** {len(template_data['sections'])}\n"
-            
-            # List section titles
-            yield f"\n### Sections\n\n"
-            for section in template_data["sections"]:
-                yield f"- {section['title']}\n"
-            
-        except json.JSONDecodeError as e:
-            yield f"Error: Invalid JSON format: {str(e)}\n"
-            yield "</think>\n\n"
-            yield f"# Template Update Failed\n\nThe template could not be updated because the provided JSON is invalid:\n\n```\n{str(e)}\n```\n\nPlease check the JSON syntax and try again."
-        except ValueError as e:
-            yield f"Error: {str(e)}\n"
-            yield "</think>\n\n"
-            yield f"# Template Update Failed\n\nThe template could not be updated due to validation errors:\n\n{str(e)}\n\nPlease correct the template structure and try again."
-        except Exception as e:
-            yield f"Error updating template: {str(e)}\n"
-            yield "</think>\n\n"
-            yield f"# Template Update Failed\n\nAn unexpected error occurred while updating the template:\n\n{str(e)}"

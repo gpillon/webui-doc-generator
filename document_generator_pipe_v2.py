@@ -18,7 +18,6 @@ import asyncio
 import logging
 import time
 import re
-from fastapi import Request
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -186,7 +185,7 @@ class Pipe:
                 "description": "List all sections in the current document",
                 "requires": [{"name": "chat_id", type: "string", "description": "The chat ID of the document"}]
             },
-            "create_outline": {
+            "create_summary": {
                 "description": "Create an outline for a document",
                 "requires": [{"name": "topic", type: "string", "description": "The topic of the document"}]
             }
@@ -326,7 +325,7 @@ Example response format:
 Please return ONLY a JSON array with a single action object like this example:
 {example_json}
 
-Remember to choose from one of these actions: write_full_doc, edit_section, add_section, list_sections, summarize_doc, expand_section, rewrite_section, create_outline"""
+Remember to choose from one of these actions: write_full_doc, edit_section, add_section, list_sections, summarize_doc, expand_section, rewrite_section, create_summary"""
             
             payload["messages"] = [
                 {"role": "system", "content": system_prompt},

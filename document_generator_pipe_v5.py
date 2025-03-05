@@ -10,16 +10,9 @@ version: 0.5.0
 licence: MIT
 """
 
-# TODO: document language
-# TODO: increment the timeout for generate_section
-
-#auto Todo:
-# - Add a "create_outline" action that creates an outline for the document
-# - Add a "create_summary" action that creates a summary for the document
-# - Add a "create_toc" action that creates a table of contents for the document
-# - Add a "create_index" action that creates an index for the document
-# - Add a "create_bibliography" action that creates a bibliography for the document
-
+# TODO: Fixed section: alcune sezione possono essere fisse; in altri casi la sezione può essere fissa e vanno generati solo alcuni campi
+# TODO: generate TOC (indice)
+# TODO: Alcune sezioni possono contenere solo il titolo e basta, senza testo
 
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any, Union, Generator, Iterator
@@ -338,7 +331,7 @@ class Pipe:
             },
             "summarize_doc": {
                 "description": "Summarize the existing document",
-                "requires": []
+                "requires": [{"name": "chat_id", "type": "string", "description": "The chat ID of the document"}]
             },
             "expand_section": {
                 "description": "Expand a specific section with more details",
@@ -479,7 +472,6 @@ class Pipe:
             expand_patterns = ["expand", "elaborate", "more details", "extend"]
             rewrite_patterns = ["rewrite", "rephrase", "different style", "new style"]
             outline_patterns = ["outline", "structure", "framework", "plan"]
-            # outline_patterns = ["outline", "structure", "framework", "plan"]
             
             user_message_lower = user_message.lower()
             
@@ -815,7 +807,7 @@ Remember to choose from one of these actions: write_full_doc, edit_section, add_
                     populated_content = populated_content.replace(f"{{{field_name}}}", field_value)
                     
                     # Yield progress for each field
-                    yield {"content_piece": f"Generated value for {field_name}: {field_value}\n"}
+                    yield {"content_piece": f"Generated value for {field_name}...\n"}
                     
                 except Exception as e:
                     logger.error(f"Error generating field {field_name}: {str(e)}")
@@ -825,28 +817,12 @@ Remember to choose from one of these actions: write_full_doc, edit_section, add_
             yield {"content": populated_content, "status": "complete"}
             return
         
-        elif section_type == "empty":
-            # For empty sections, return empty content
-            yield {"content": "", "status": "complete"}
-            return
-            
-        elif section_type == "toc":
-            # For TOC sections, we'll generate the actual TOC during document formatting
-            # Just provide a placeholder here
-            yield {"content": "[Table of Contents will be generated when displaying the document]", "status": "complete"}
-            return
-        
-        # Generate document structure for context
-        document_structure = self._generate_document_outline(section)
-        
         # Default case: "generate" - existing behavior
         prompt = section["prompt"].format(topic=topic)
         
-        # Append clear instructions to force paragraph-only output, now including document structure
+        # Append clear instructions to force paragraph-only output
         prompt += (
-            "\n\nHere is the document structure for context:\n"
-            f"{document_structure}\n\n"
-            "Please generate only plain text paragraphs without any markdown formatting. "
+            "\n\nPlease generate only plain text paragraphs without any markdown formatting. "
             "Do not include titles, headings, '#' symbols, or subsections. "
             "Do not include any other text, formatting, or comments. just the content for the section. "
             "The response should serve as the content for an already existing section of a markdown file on the topic: '{}'.".format(topic) +
@@ -865,131 +841,58 @@ Remember to choose from one of these actions: write_full_doc, edit_section, add_
         
         logger.info(f"Generating section with prompt: {prompt}")
 
-        # Set up timeout for the request
-        timeout = httpx.Timeout(self.valves.REQUEST_TIMEOUT, connect=5.0)
-        
-        # Add retry logic
-        max_retries = 2
-        for retry in range(max_retries + 1):  # +1 for the initial attempt
-            try:
-                async with client.stream(
-                    "POST",
-                    f"{self.valves.API_HOST}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=timeout
-                ) as response:
-                    if response.status_code != 200:
-                        error_text = await response.aread()
-                        error_message = f"API error ({response.status_code}): {error_text.decode('utf-8')}"
-                        logger.error(f"Section generation error (attempt {retry+1}): {error_message}")
-                        if retry < max_retries:
-                            logger.info(f"Retrying in 5 seconds... (attempt {retry+1}/{max_retries})")
-                            await asyncio.sleep(5)  # Wait 5 seconds before retry
-                            continue
-                        else:
-                            # All retries failed, yield empty content
-                            logger.warning(f"All retry attempts failed for section generation. Returning empty content.")
-                            yield {"content": "", "status": "complete"}
-                            return
+        try:
+            # Set up timeout for the request
+            timeout = httpx.Timeout(self.valves.REQUEST_TIMEOUT, connect=5.0)
+            
+            async with client.stream(
+                "POST",
+                f"{self.valves.API_HOST}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=timeout
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    error_message = f"API error ({response.status_code}): {error_text.decode('utf-8')}"
+                    logger.error(f"Section generation error: {error_message}")
+                    yield {"error": error_message}
+                    return
+                
+                # Stream the content
+                content_buffer = ""
+                async for chunk in response.aiter_bytes():
+                    if not chunk:
+                        continue
                     
-                    # Stream the content
-                    content_buffer = ""
-                    async for chunk in response.aiter_bytes():
-                        if not chunk:
-                            continue
-                        
-                        chunk_str = chunk.decode('utf-8')
-                        # Handle SSE format (data: prefix)
-                        for line in chunk_str.split('\n'):
-                            if line.startswith('data: ') and line != 'data: [DONE]':
-                                try:
-                                    data = json.loads(line[6:])
-                                    if 'choices' in data and len(data['choices']) > 0:
-                                        delta = data['choices'][0].get('delta', {})
-                                        if 'content' in delta:
-                                            content_piece = delta['content']
-                                            content_buffer += content_piece
-                                            # Yield each piece as it arrives
-                                            yield {"content_piece": content_piece}
-                                except json.JSONDecodeError as e:
-                                    logger.error(f"JSON parse error: {str(e)} for line: {line}")
-                    
-                    # Yield the final success status with complete content
-                    yield {"content": content_buffer, "status": "complete"}
-                    return  # Success, exit the retry loop
-                    
-            except httpx.TimeoutException:
-                error_message = f"Request timed out after {self.valves.REQUEST_TIMEOUT} seconds"
-                logger.error(f"Section generation timeout (attempt {retry+1}): {error_message}")
-                if retry < max_retries:
-                    logger.info(f"Retrying in 5 seconds... (attempt {retry+1}/{max_retries})")
-                    await asyncio.sleep(5)  # Wait 5 seconds before retry
-                else:
-                    # All retries failed, yield empty content
-                    logger.warning(f"All retry attempts failed due to timeout. Returning empty content.")
-                    yield {"content": "", "status": "complete"}
-            except Exception as e:
-                error_message = f"Exception: {str(e)}"
-                logger.error(f"Section generation exception (attempt {retry+1}): {error_message}")
-                if retry < max_retries:
-                    logger.info(f"Retrying in 5 seconds... (attempt {retry+1}/{max_retries})")
-                    await asyncio.sleep(5)  # Wait 5 seconds before retry
-                else:
-                    # All retries failed, yield empty content
-                    logger.warning(f"All retry attempts failed due to exception. Returning empty content.")
-                    yield {"content": "", "status": "complete"}
+                    chunk_str = chunk.decode('utf-8')
+                    # Handle SSE format (data: prefix)
+                    for line in chunk_str.split('\n'):
+                        if line.startswith('data: ') and line != 'data: [DONE]':
+                            try:
+                                data = json.loads(line[6:])
+                                if 'choices' in data and len(data['choices']) > 0:
+                                    delta = data['choices'][0].get('delta', {})
+                                    if 'content' in delta:
+                                        content_piece = delta['content']
+                                        content_buffer += content_piece
+                                        # Yield each piece as it arrives
+                                        yield {"content_piece": content_piece}
+                            except json.JSONDecodeError as e:
+                                logger.error(f"JSON parse error: {str(e)} for line: {line}")
+                
+                # Yield the final success status with complete content
+                yield {"content": content_buffer, "status": "complete"}
+                
+        except httpx.TimeoutException:
+            error_message = f"Request timed out after {self.valves.REQUEST_TIMEOUT} seconds"
+            logger.error(f"Section generation timeout: {error_message}")
+            yield {"error": error_message}
+        except Exception as e:
+            error_message = f"Exception: {str(e)}"
+            logger.error(f"Section generation exception: {error_message}")
+            yield {"error": error_message}
 
-    def _generate_document_outline(self, current_section):
-        """Generate markdown outline of the document structure."""
-        # Start with an empty outline
-        outline = []
-        
-        # Find the root template by traversing up the section hierarchy
-        root_sections = None
-        
-        # If we have a current document being generated
-        if hasattr(self, 'current_document') and self.current_document:
-            root_sections = self.current_document.get("template", {}).get("sections", [])
-        
-        # If no current document, use the current section to infer the template
-        if not root_sections:
-            # Find which template this section belongs to
-            for template_id, template in self.templates.items():
-                def find_in_sections(sections, section_name):
-                    for s in sections:
-                        if s["name"] == section_name:
-                            return True
-                        if "children" in s and s["children"]:
-                            if find_in_sections(s["children"], section_name):
-                                return True
-                    return False
-                
-                if find_in_sections(template["sections"], current_section["name"]):
-                    root_sections = template["sections"]
-                    break
-        
-        # If we still don't have root sections, use the current section as a standalone
-        if not root_sections:
-            outline.append(f"# {current_section['title']}")
-            return "\n".join(outline)
-        
-        # Generate the outline recursively
-        def build_outline(sections, level=1):
-            for section in sections:
-                # Add this section to the outline with appropriate heading level
-                prefix = "#" * level
-                outline.append(f"{prefix} {section['title']}")
-                
-                # Process children if any
-                if "children" in section and section["children"]:
-                    build_outline(section["children"], level + 1)
-        
-        # Build the complete outline
-        build_outline(root_sections)
-        
-        return "\n".join(outline)
-    
     async def edit_document_section(self, client, model_id, section_name, document, instructions, headers):
         """Edit an existing section of the document."""
         # Find the section in the document
@@ -1810,70 +1713,32 @@ Where should this new section be placed in the document structure? Return the po
         else:
             output.append(f"# Generated Document\n")
         
-        # Generate table of contents data structure for TOC sections
-        toc_entries = []
-        
-        def collect_toc_entries(sections, indent=0):
-            entries = []
-            for section in sections:
-                # Skip TOC sections themselves from the TOC
-                if section.get("sectionType") == "toc":
-                    continue
-                    
-                entries.append({
-                    "title": section["title"],
-                    "name": section["name"],
-                    "indent": indent
-                })
-                
-                if "children" in section and section["children"]:
-                    entries.extend(collect_toc_entries(section["children"], indent + 1))
-            return entries
-            
-        toc_entries = collect_toc_entries(document["template"]["sections"])
-        
         # Helper function to recursively format sections
         def format_section(section, level=2):
             section_key = section["name"]
             heading_prefix = "#" * level
             section_type = section.get("sectionType", "generate")
             
-            if section_key in document["sections"] or section_type in ["empty", "toc"]:
-                # Handle different section types
-                if section_type == "toc":
-                    # Generate table of contents
-                    if section_key == highlight_section:
-                        output.append(f"{heading_prefix} {section['title']} (Table of Contents - Updated)\n")
+            if section_key in document["sections"]:
+                # Highlight the edited section if specified
+                if section_key == highlight_section:
+                    if section_type == "fixed":
+                        output.append(f"{heading_prefix} {section['title']} (Fixed Section - Updated)\n")
+                    elif section_type == "populate":
+                        output.append(f"{heading_prefix} {section['title']} (Template Section - Updated)\n")
                     else:
-                        output.append(f"{heading_prefix} {section['title']} \u007b#{section['name']}\u007d\n")
-                    
-                    # Generate TOC entries as markdown links
-                    for entry in toc_entries:
-                        # indent = "  " * entry["indent"]
-                        # output.append(f"{indent}- [{entry['title']}](#{entry['name']})\n")
-                        output.append(f"[{entry['title']}](#{entry['name']})\n")
-                    
-                    output.append("\n")
-                elif section_type == "empty":
-                    # Just add the heading for empty sections, no content
-                    if section_key == highlight_section:
-                        output.append(f"{heading_prefix} {section['title']} (Empty Section - Updated)\n\n")
-                    else:
-                        output.append(f"{heading_prefix} {section['title']} \u007b#{section['name']}\u007d\n\n")
+                        output.append(f"{heading_prefix} {section['title']} (Updated)\n")
                 else:
-                    # Handle regular, fixed and populate sections
-                    if section_key == highlight_section:
-                        if section_type == "fixed":
-                            output.append(f"{heading_prefix} {section['title']} (Fixed Section - Updated)\n")
-                        elif section_type == "populate":
-                            output.append(f"{heading_prefix} {section['title']} (Template Section - Updated)\n")
-                        else:
-                            output.append(f"{heading_prefix} {section['title']} (Updated)\n")
+                    if section_type == "fixed":
+                        # output.append(f"{heading_prefix} {section['title']} (Fixed Section)\n")
+                        output.append(f"{heading_prefix} {section['title']}\n")
+                    elif section_type == "populate":
+                        # output.append(f"{heading_prefix} {section['title']} (Template Section)\n")
+                        output.append(f"{heading_prefix} {section['title']}\n")
                     else:
-                        output.append(f"{heading_prefix} {section['title']} \u007b#{section['name']}\u007d\n")
-                    
-                    if section_type != "empty" and section_key in document["sections"]:
-                        output.append(f"{document['sections'][section_key]}\n\n")
+                        output.append(f"{heading_prefix} {section['title']}\n")
+                
+                output.append(f"{document['sections'][section_key]}\n\n")
                 
                 # Process child sections if any
                 if "children" in section and section["children"]:
@@ -2266,13 +2131,11 @@ Follow the guidelines exactly and provide only the requested JSON output."""
                 output.append("**Example:** _Show me all available document templates_\n\n")
             elif action_name == "generate_template":
                 output.append("**Example:** _Generate a template from this markdown document:_\n\n")
-                output.append("```markdown\n# Introduction\nThis is an introduction to my topic.\n\n# {{fixed}} Terms and Definitions\nThese terms will remain the same in all documents.\n\n# {{populate:[{\"name\":\"date\",\"prompt\":\"Generate today's date\"},{\"name\":\"author\",\"prompt\":\"Generate an author name\"}]}} Report Information\nDate: {date}\nAuthor: {author}\n\n# {{toc}} Table of Contents\n\n# {{empty}} Empty Section\nThis section will be empty.\n\n # Analysis\nThis section will be generated dynamically.\n```\n\n")
+                output.append("```markdown\n# Introduction\nThis is an introduction to my topic.\n\n# {{fixed}} Terms and Definitions\nThese terms will remain the same in all documents.\n\n# {{populate:[{\"name\":\"date\",\"prompt\":\"Generate today's date\"},{\"name\":\"author\",\"prompt\":\"Generate an author name\"}]}} Report Information\nDate: {date}\nAuthor: {author}\n\n# Analysis\nThis section will be generated dynamically.\n```\n\n")
                 output.append("**Section Types:**\n")
                 output.append("- Regular sections (no tag): Content is generated dynamically\n")
                 output.append("- Fixed sections (`{{fixed}}`): Content is used as-is without changes\n")
-                output.append("- Template sections (`{{populate:[fields]}}`): Content with placeholders that get populated\n")
-                output.append("- TOC sections (`{{toc}}`): Generates a table of contents for the document\n")
-                output.append("- Empty sections (`{{empty}}`): Generates a section with no content\n")
+                output.append("- Template sections (`{{populate:[fields]}}`): Content with placeholders that get populated\n\n")
             else:
                 output.append("\n")
                     
@@ -2372,12 +2235,6 @@ Follow the guidelines exactly and provide only the requested JSON output."""
                     # Parse the section type from the tag
                     if tag == "{{fixed}}":
                         current_section_type = "fixed"
-                        current_section_populate_fields = []
-                    elif tag == "{{empty}}":
-                        current_section_type = "empty"
-                        current_section_populate_fields = []
-                    elif tag == "{{toc}}":
-                        current_section_type = "toc"
                         current_section_populate_fields = []
                     elif tag.startswith("{{populate:"):
                         current_section_type = "populate"
