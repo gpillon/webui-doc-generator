@@ -17,6 +17,7 @@ licence: MIT
 # TODO: add a "cleanup" action that removes inwanted section and cleans up the document
 # TODO: idea for editing document.. each time that the the pipe is acalle, we can compare the document with the original document, and detect the changes.
 # TODO: use thinking models also for content generation
+# TODO: split list template in "detail template" adn "list only template names"
 #auto Todo:
 # - Add a "create_summary" action that creates a summary for the document
 
@@ -1148,6 +1149,7 @@ Remember to choose from one of these actions: {', '.join(self.actions.keys())}""
         build_outline(root_sections)
         
         return "\n".join(outline)
+    
     def find_section_in_template(self, sections, section_name):
         for s in sections:
             if s["name"] == section_name:
