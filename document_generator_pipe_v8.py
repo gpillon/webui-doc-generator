@@ -348,12 +348,6 @@ class Pipe:
 
                 ]
             },
-            "remove_section": {
-                "description": "Remove a section from the document",
-                "requires": [
-                    {"name": "section_name", "type": "string", "description": "The name of the section to remove"}
-                ]
-            },
             "summarize_doc": {
                 "description": "Summarize the existing document",
                 "requires": []
@@ -531,9 +525,6 @@ class Pipe:
                         yield chunk
                 elif action == "add_section":
                     async for chunk in self.handle_add_section(client, chat_id, user_message, params, headers, __event_emitter__):
-                        yield chunk
-                elif action == "remove_section":
-                    async for chunk in self.handle_remove_section(chat_id, params):
                         yield chunk
                 elif action == "list_sections":
                     async for chunk in self.handle_list_sections(chat_id):
@@ -2971,130 +2962,3 @@ Create a name and description for this document template. Return only JSON."""
         
         build_outline(sections)
         return "\n".join(outline)
-
-    async def handle_remove_section(self, chat_id, params):
-        """Handle removing a section from the document.
-        
-        Args:
-            chat_id: The chat ID to identify the document
-            params: Parameters for the action, including section_name
-            
-        Returns:
-            Generator yielding status updates and the final result
-        """
-        section_name = params.get("section_name", "")
-        
-        yield f"Attempting to remove section: {section_name}...\n"
-        
-        # Check if we have a document
-        if chat_id not in self.documents:
-            yield "No document found. Please generate a document first."
-            yield "</think>\n\n"
-            yield "# No Document Found\n\nI couldn't find any document in the current chat. Please create a document first using the 'write_full_doc' action."
-            return
-        
-        document = self.documents[chat_id]
-        
-        # Find the section in the document structure
-        section, path = self.find_section_by_name(document, section_name)
-        
-        if not section:
-            yield f"Section '{section_name}' not found in the document.\n"
-            yield "</think>\n\n"
-            yield f"# Section Not Found\n\nI couldn't find a section named '{section_name}' in your document. Please check the section name and try again. You can use the 'list_sections' action to see all available sections."
-            return
-        
-        # Remove the section from the template structure
-        # We need to find the parent of the section to remove it from children
-        if "/" in path:
-            parent_path, _ = path.rsplit("/", 1)
-            parent_section = self._find_section_by_path(document["template"]["sections"], parent_path)
-            
-            if parent_section and "children" in parent_section:
-                # Find the index of the section in the parent's children
-                idx = next((i for i, child in enumerate(parent_section["children"]) 
-                           if child["name"] == section["name"]), -1)
-                
-                if idx >= 0:
-                    # Remove the section from the parent's children
-                    parent_section["children"].pop(idx)
-                    yield f"Removed section from parent's children.\n"
-        else:
-            # This is a top-level section
-            # Find the index of the section in the template's sections
-            idx = next((i for i, s in enumerate(document["template"]["sections"]) 
-                       if s["name"] == section["name"]), -1)
-            
-            if idx >= 0:
-                # Remove the section from the template's sections
-                document["template"]["sections"].pop(idx)
-                yield f"Removed top-level section from template structure.\n"
-        
-        # Remove the section content from the sections dictionary
-        if section["name"] in document["sections"]:
-            del document["sections"][section["name"]]
-            yield f"Removed section content.\n"
-        
-        # Also remove any child sections from the sections dictionary
-        def remove_child_sections(section):
-            if "children" in section and section["children"]:
-                for child in section["children"]:
-                    child_name = child["name"]
-                    if child_name in document["sections"]:
-                        del document["sections"][child_name]
-                        yield f"Removed child section: {child_name}\n"
-                    # Recursively remove further children
-                    for msg in remove_child_sections(child):
-                        yield msg
-        
-        for msg in remove_child_sections(section):
-            yield msg
-        
-        # Update the document timestamps
-        document["updated_at"] = time.time()
-        
-        # If using file storage, save the document
-        if self.valves.DOCUMENT_STORAGE == "file":
-            self.save_document(chat_id, document)
-            yield f"Saved updated document to file storage.\n"
-        
-        yield "</think>\n\n"
-        
-        # Generate response for the user
-        output = [f"# Section Removed\n\n"]
-        output.append(f"I've successfully removed the section '**{section['title']}**' from your document.\n")
-        
-        # Show the updated structure
-        output.append("\n## Updated Document Structure\n\n")
-        output.append(self.list_document_sections(document))
-        
-        yield "\n".join(output)
-    
-    def _find_section_by_path(self, sections, path):
-        """Find a section by its path in the section hierarchy.
-        
-        Args:
-            sections: List of sections to search through
-            path: Path in the format "section1/section2/section3"
-            
-        Returns:
-            The section object if found, None otherwise
-        """
-        path_parts = path.split("/")
-        current_sections = sections
-        
-        for i, part in enumerate(path_parts):
-            found = False
-            for section in current_sections:
-                if section["name"] == part:
-                    if i == len(path_parts) - 1:
-                        return section
-                    elif "children" in section and section["children"]:
-                        current_sections = section["children"]
-                        found = True
-                        break
-            
-            if not found:
-                return None
-                
-        return None
