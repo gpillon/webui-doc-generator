@@ -14,8 +14,9 @@ licence: MIT
 # TODO: fix git retrival of templates
 # todo: self.document = loaded_document not working in document in "memory" (file working)
 # TODO: add RAG to the document generator
+# TODO: add a "cleanup" action that removes inwanted section and cleans up the document
 # TODO: idea for editing document.. each time that the the pipe is acalle, we can compare the document with the original document, and detect the changes.
-
+# TODO: use thinking models also for content generation
 #auto Todo:
 # - Add a "create_summary" action that creates a summary for the document
 
@@ -1147,12 +1148,22 @@ Remember to choose from one of these actions: {', '.join(self.actions.keys())}""
         build_outline(root_sections)
         
         return "\n".join(outline)
+    def find_section_in_template(self, sections, section_name):
+        for s in sections:
+            if s["name"] == section_name:
+                return s
+            if "children" in s and s["children"]:
+                result = self.find_section_in_template(s["children"], section_name)
+                if result:
+                    return result
+        return None
     
     async def edit_document_section(self, client, model_id, section_name, document, instructions, headers):
         """Edit an existing section of the document."""
         # Find the section in the document
         section_content = document["sections"].get(section_name, "")
-        section_info = next((s for s in document["template"]["sections"] if s["name"] == section_name), None)
+        # section_info = next((s for s in document["template"]["sections"] if s["name"] == section_name), None)
+        section_info = self.find_section_in_template(document["template"]["sections"], section_name)
 
         system_prompt = self.system_prompts["generic_init"]
         document_structure = self._generate_document_outline(section_info)
