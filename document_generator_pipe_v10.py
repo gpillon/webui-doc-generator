@@ -10,25 +10,20 @@ version: 0.5.0
 licence: MIT
 """
 
-# TODO(feature): document language; eg. if (template.language == "french") then (use french) else (use topic language)
-# TODO(feature): document style; eg. if (template.style == "formal") then (use formal language) else (use informal language)
-# TODO(feature): document tone; eg. if (template.tone == "neutral") then (use neutral tone) else (use positive or negative tone)
-# TODO(feature): document length; eg. if (template.length == "short") then (use short sentences) else (use long sentences)
-# TODO(feature): Add a "create_summarization" action that creates a summarization of the document
+# TODO: document language
+# TODO: fix git retrival of templates
+# TODO: self.document = loaded_document not working in document in "memory" (file working)
+# TODO: add RAG to the document generator
+# TODO: add a "cleanup" action that cleans up the document
+# TODO: idea for editing document.. each time that the the pipe is acalle, we can compare the document with the original document, and detect the changes.
+# TODO: split list template in "detail template" adn "list only template names"
+# TODO: Remove section is not smart wants always "the section name" and not enterpretes the "section title"
+# TODO: when adding subsection the title contains the section title and the subsection title
+# TODO: support multiple actions; actions can be queued, to do many things toghether.
 
-# TODO(feature): add a "cleanup" action that cleans up the document, checks, the language style, etc...
-# TODO(feature): idea for editing document.. each time that the the pipe is called, we can compare the document with the original document, and detect the changes.
-# TODO(feature): split list template in "detail template" adn "list only template names"
-# TODO(feature): support multiple actions; actions can be queued, to do many things toghether.
-
-# TODO(fix,IMPORTANT): Implement the rag for "add section and edit section"
-# TODO(fix): fix templates retrival from GIT
-# TODO(fix): self.document = loaded_document not working in document in "memory" (file working)
-# TODO(fix): Remove section is not smart wants always "the section name" and not enterpretes the "section title"
-# TODO(fix,maybe fixed): when adding subsection the title contains the section title and the subsection title
-
-# TODO(enhancement): remove "smart" model and combine with "if user prompt start with [pattern] then do [action]"
-
+# TODO: remove "smart" model and combine with "if user prompt start with [pattern] then do [action]"
+#auto Todo:
+# - Add a "create_summary" action that creates a summary for the document
 
 import json
 import httpx
@@ -42,16 +37,6 @@ import shutil
 import glob
 from pydantic import BaseModel, Field
 from typing import Union, Generator, Iterator
-
-# RAG imports
-from open_webui.retrieval.utils import (
-    query_collection,
-    query_collection_with_hybrid_search,
-    get_embedding_function
-)
-from open_webui.retrieval.web.utils import get_web_loader
-from open_webui.retrieval.web.duckduckgo import search_duckduckgo
-
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -115,30 +100,6 @@ class Pipe:
         GIT_TEMPLATE_REPOS: str = Field(
             default="",
             description="Comma-separated list of Git repositories containing additional templates"
-        )
-        ENABLE_RAG: bool = Field(
-            default=True,
-            description="Enable Retrieval Augmented Generation when creating document sections"
-        )
-        RELEVANCE_THRESHOLD: float = Field(
-            default=0.3,
-            description="Default relevance threshold to use for RAG (if empty, will use default value)"
-        )
-        RAG_RESULT_COUNT: int = Field(
-            default=5,
-            description="Number of documents to retrieve for RAG"
-        )
-        RAG_WEB_SEARCH: bool = Field(
-            default=False,
-            description="Enable web search retrieval for RAG"
-        )
-        RAG_WEB_SEARCH_ENGINE: str = Field(
-            default="duckduckgo",
-            description="Web search engine to use for RAG"
-        )
-        RAG_HYBRID_SEARCH: bool = Field(
-            default=True,
-            description="Use hybrid search (vector + reranking) for better results"
         )
 
         class Config:
@@ -343,10 +304,6 @@ class Pipe:
             ),
             "no_conclusions": (
                 "The response must not contain phrases like 'finally', 'in conclusion', 'in summary', or 'in the end'. "
-            ),
-            "rag": (
-                "You are an AI assistant helping with document generation. You are given a topic and a prompt. You must generate a query for getting data from a Vector Database. You must give only the query, nothing else. You MUST not add comments, just the query." + 
-                "for example, if the prompt is 'generate  a section for the topic: 'capital of France',' and the topic is 'France', the query for getting data from a Vector Database should be 'What is the capital of France?'"
             )
         }
 
@@ -372,7 +329,7 @@ class Pipe:
                 "description": "Add a new section or sub-section to the document",
                 "patterns": ["add", "insert", "include", "create section"],
                 "requires": [
-                    {"name": "section_title", "type": "string", "description": "The title for the new section. NEVER  include: formatting, markdown, symbols, paragraph numbers or other section titles."},
+                    {"name": "section_title", "type": "string", "description": "The title for the new section. NEVER  include: formatting, markdown, symbols, paragraph numbers ot other section titles."},
                     {"name": "instructions", "type": "string", "description": "Instructions for the section content"}
                 ]
             },
@@ -475,7 +432,7 @@ class Pipe:
             })
         return options
 
-    async def pipe(self, body: dict, __event_emitter__=None, __metadata__=None, __request__=None, __user__=None, __task__=None, __task_body__=None, __files__=None) -> Union[str, Generator, Iterator]:
+    async def pipe(self, body: dict, __event_emitter__=None, __metadata__=None) -> Union[str, Generator, Iterator]:
         """
         Main pipeline handler that dispatches to specific action handlers.
         It extracts user messages, detects the action to perform, and then routes the request accordingly.
@@ -484,15 +441,8 @@ class Pipe:
         model_id = ""
         messages = []
         chat_id = __metadata__.get("chat_id", "default_chat")
-        request = __request__
-        user = __user__
-        # logger.info(f"Pipe body: {body}")
-        # logger.info(f"Pipe __task__: {__task__}")
-        # logger.info(f"Pipe __task_body__: {__task_body__}")
-        # logger.info(f"Pipe __files__: {__files__}")
-        # logger.info(f"Pipe __metadata__: {__metadata__}")
 
-        collection_names = self.extract_collection_names(__metadata__) 
+        logger.info(f"Pipe body: {body}")
 
         # Extract user message from the last user entry
         if "messages" in body and body["messages"]:
@@ -557,7 +507,7 @@ class Pipe:
                     yield result
                     return
                 elif action == "write_full_doc":
-                    async for chunk in self.handle_write_full_doc(client, chat_id, user_message, model_id, params, headers, __event_emitter__, request, collection_names, user):
+                    async for chunk in self.handle_write_full_doc(client, chat_id, user_message, model_id, params, headers, __event_emitter__):
                         yield chunk
                 elif action == "edit_section":
                     async for chunk in self.handle_edit_section(client, chat_id, params, headers, __event_emitter__):
@@ -848,29 +798,13 @@ class Pipe:
             response.raise_for_status()
             return response.json()
 
-    async def generate_section(self, client, model_id, section, topic, headers, request=None, collection_names=None, user=None):
-
+    async def generate_section(self, client, model_id, section, topic, headers):
         """
         Generate a single section using a streaming API call.
         If use_thinking_for_generation is True, use the thinking model and remove any <think> tags.
         """
         section_type = section.get("sectionType", "generate")
         system_prompt = self.system_prompts["generic_init"]
-
-        prompt = section.get("prompt", "").replace("{topic}", topic)
-
-        rag_context = ""
-
-        # Prepare system prompt with RAG context if available
-        system_prompt = self.system_prompts["generic_init"]
-
-        if self.valves.ENABLE_RAG and request:
-            rag_system_prompt = self.system_prompts["rag"]
-            rag_user_prompt = f"What is the query for getting data from a Vector Database for the following topic: '{topic}' and the following prompt: '{prompt}'?"
-            rag_query = await self._query_thinking_model(client, rag_system_prompt, rag_user_prompt, extract_json=False)
-            rag_query = re.sub(r'<think>.*?</think>', '', rag_query, flags=re.DOTALL)
-            rag_context, docs_count = await self._get_rag_context(client, topic, rag_query, request, collection_names, user)
-            yield {"content_piece": f"RAG query: {rag_query} ({docs_count} results)\n"}
 
         if section_type == "fixed":
             yield {"content": section.get("template_text", ""), "status": "complete"}
@@ -887,8 +821,6 @@ class Pipe:
                     "Return only the final answer and nothing else. "
                     f"This is for the section \"{section['title']}\"."
                 )
-                if rag_context:
-                    system_prompt += f"\n\nThis infomration could help you in writing your response:\n\n{rag_context}\n\n"
                 field_value = ""
                 try:
                     payload = {
@@ -928,15 +860,12 @@ class Pipe:
             f"Generate a single paragraph for the section \"{section['title']}\". "
             f"{self.system_prompts['no_conclusions']}"
         )
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
-        if rag_context:
-            messages.append({"role": "user", "content": f"This infomration could help you in writing your response:\n\n{rag_context}\n\n"})
         payload = {
             "model": model_id,
-            "messages": messages,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
             "temperature": self.valves.TEMPERATURE,
             "max_tokens": self.valves.MAX_TOKENS,
             "stream": True,
@@ -1105,7 +1034,7 @@ class Pipe:
             "section_metadata": new_section
         }
 
-    async def handle_write_full_doc(self, client, chat_id, user_message, model_id, params, headers, __event_emitter__=None, request=None, collection_names=None, user=None):
+    async def handle_write_full_doc(self, client, chat_id, user_message, model_id, params, headers, __event_emitter__=None):
         """Handle generating a full document."""
         topic = params.get("topic", user_message).strip()
         template_id = params.get("template_id", self.valves.TEMPLATE_NAME)
@@ -1123,8 +1052,6 @@ class Pipe:
                 "data": {"description": f"Generating document on '{topic}'", "done": False}
             })
         yield f"Generating full document on '{topic}' using template: {template['name']}\n\n"
-        if self.valves.ENABLE_RAG:
-            yield "RAG is enabled - using knowledge base to enhance document generation\n"
         document = {
             "topic": topic,
             "template": template,
@@ -1133,9 +1060,7 @@ class Pipe:
             "created_at": time.time(),
             "updated_at": time.time()
         }
-
-
-        async for chunk in self.generate_document(client, llm_model_id, template, topic, headers, request, collection_names, user):
+        async for chunk in self.generate_document(client, llm_model_id, template, topic, headers):
             yield chunk
         if hasattr(self, 'current_document') and self.current_document:
             document = self.current_document
@@ -1492,7 +1417,7 @@ class Pipe:
             logger.error(f"Error loading document: {e}")
             return None
 
-    async def generate_document(self, client, llm_model_id, template, topic, headers, request, collection_names=None, user=None):
+    async def generate_document(self, client, llm_model_id, template, topic, headers):
         """Generate a complete document with nested sections."""
         document = {
             "topic": topic,
@@ -1509,7 +1434,7 @@ class Pipe:
             yield f"Generating section: {sec_name}...\n"
             section_content = ""
             has_error = False
-            async for chunk in self.generate_section(client, llm_model_id, sec, topic, headers, request, collection_names, user):
+            async for chunk in self.generate_section(client, llm_model_id, sec, topic, headers):
                 if "error" in chunk:
                     yield f"Failed to generate section '{sec_name}'. Moving to next section...\n"
                     has_error = True
@@ -2233,152 +2158,3 @@ class Pipe:
             if not found:
                 return None
         return None
-
-    async def _get_rag_context(self, client, topic, section_prompt, request=None, collection_names=None, user=None):
-        """
-        Retrieve context from RAG systems for the given topic and section prompt.
-        Returns context text as a string.
-        """
-        if not self.valves.ENABLE_RAG:
-            return ""
-
-        context_texts = []
-
-        logger.info(f"RAG is enabled - using knowledge base to enhance document generation")
-
-        try:
-            # Use vector database retrieval if available
-            if request and hasattr(request, "app") and hasattr(request.app, "state"):
-                app_state = request.app.state
-
-                # Prepare the query combining topic and section prompt
-                # query = f"{topic} {section_prompt}"
-                query = f"{section_prompt}"
-
-                logger.info(f"query: {query}")
-                
-                # Determine which search method to use
-                results = {}
-                # logger.info(f"RAG_HYBRID_SEARCH: {self.valves.RAG_HYBRID_SEARCH}")
-                # logger.info(f"rf: {app_state.rf}")
-                # logger.info(f"EMBEDDING_FUNCTION: {app_state.EMBEDDING_FUNCTION}")
-                # logger.info(f"queries: {query}")
-                # logger.info(f"collection_names: {collection_names}")
-                # logger.info(f"user: {user}")
-                # logger.info(f"used RAG_RESULT_COUNT: {self.valves.RAG_RESULT_COUNT if self.valves.RAG_RESULT_COUNT else app_state.config.RAG_RESULT_COUNT}")
-                # logger.info(f"used RELEVANCE_THRESHOLD: {self.valves.RELEVANCE_THRESHOLD if self.valves.RELEVANCE_THRESHOLD else app_state.config.RELEVANCE_THRESHOLD}")
-                # logger.info(f"used RAG_WEB_SEARCH: {self.valves.RAG_WEB_SEARCH}")
-                logger.info(f"used query_collection_with_hybrid_search?: {self.valves.RAG_HYBRID_SEARCH and hasattr(app_state, 'rf') and app_state.rf}")
-                # logger.info(f"query_embedding: {app_state.EMBEDDING_FUNCTION(query, user=user)}")
-                
-                k = self.valves.RAG_RESULT_COUNT if self.valves.RAG_RESULT_COUNT else app_state.config.RAG_RESULT_COUNT
-                if self.valves.RAG_HYBRID_SEARCH:
-                    results = query_collection_with_hybrid_search(
-                        queries=[query],
-                        collection_names=collection_names,
-                        embedding_function=lambda query: app_state.EMBEDDING_FUNCTION(
-                            query, user=user
-                        ),
-                        k=k,
-                        reranking_function=app_state.rf,
-                        r=(
-                            self.valves.RELEVANCE_THRESHOLD if self.valves.RELEVANCE_THRESHOLD else app_state.config.RELEVANCE_THRESHOLD
-                        ),
-                    )
-                else:
-                    results = query_collection(
-                        queries=[query],
-                        collection_names=collection_names,
-                        embedding_function=lambda query: app_state.EMBEDDING_FUNCTION(
-                            query, user=user
-                        ),
-                        k=k,
-                    )
-                # logger.info(f"RAG results: {json.dumps(results, indent=2)}")
-                #logger.info(f"RAG results count: {len(results.get('documents', []))}")
-               
-                # Extract text from results
-                # if results and "results" in results:
-                #     for result in results["documents"]:
-                #         context_texts.append(result["page_content"])
-                #         # if "text" in result and result["text"]:
-                #         #     context_texts.append(result["text"])
-                #         # elif "content" in result and result["content"]:
-                #         #     context_texts.append(result["content"])
-                if results and "documents" in results:
-                    # Iterate over each list in the "documents" key
-                    for doc_list in results["documents"]:
-                        for doc in doc_list:
-                            context_texts.append(doc)
-            
-            # Use web search if enabled
-            if self.valves.RAG_WEB_SEARCH:
-                query = f"{topic} {section_prompt}"
-                web_results = []
-                
-                # Use DuckDuckGo as default, adjust if you want to support other engines
-                if self.valves.RAG_WEB_SEARCH_ENGINE == "duckduckgo":
-                    web_results = await search_duckduckgo(
-                        query=query, 
-                        max_results=self.valves.RAG_RESULT_COUNT
-                    )
-                
-                # Load content from search results
-                if web_results:
-                    web_loader = get_web_loader(ssl_verify=True)
-                    for result in web_results:
-                        if hasattr(result, "url") and result.url:
-                            try:
-                                content = await web_loader.load_content(result.url)
-                                if content:
-                                    context_texts.append(f"From {result.url}:\n{content[:1000]}...")
-                            except Exception as e:
-                                logger.warning(f"Failed to load content from {result.url}: {e}")
-            
-            # Combine all context
-            combined_context = "\n\n---\n\n".join(context_texts)
-            
-            # Log the amount of context retrieved
-            logger.info(f"Retrieved {len(context_texts)} context pieces for RAG")
-            
-            return (combined_context, len(context_texts))
-
-        except Exception as e:
-            logger.error(f"Error retrieving RAG context: {e}")
-            return ""
-        
-    def extract_collection_names(self, data):
-        """
-        Extracts all collection UUID strings from the provided dictionary.
-        
-        The function looks for collections in two ways:
-        1. In the top-level "files" list, it finds any file whose "type" is "collection"
-            and adds its "id" (if present) to the result.
-        2. It also checks each file's nested "files" list and, for each nested file,
-            if the "meta" dictionary contains a "collection_name", that value is added.
-            
-        Args:
-            data (dict): The dictionary to search for collection UUIDs.
-            
-        Returns:
-            list: A list of unique collection UUID strings.
-        """
-        collections = set()
-        if not data or not data.get("files"):
-            return collections
-        
-        # Loop through top-level files, if any.
-        for file in data.get("files", []):
-            # Check if this file is a collection.
-            if file.get("type") == "collection":
-                # Add the collection id if available.
-                if "id" in file:
-                    collections.add(file["id"])
-                
-                # Check nested files for a collection_name in their meta data.
-                for nested_file in file.get("files", []):
-                    meta = nested_file.get("meta", {})
-                    if "collection_name" in meta:
-                        collections.add(meta["collection_name"])
-        
-        return list(collections)
