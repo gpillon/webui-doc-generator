@@ -1,1 +1,18 @@
 open-webui/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# VSCode
+.vscode/
+
+# PyCharm
+.idea/
+
+# venv
+.venv/
+
+download_doc.sh

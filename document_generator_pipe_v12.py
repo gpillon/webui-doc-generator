@@ -10,6 +10,28 @@ version: 0.5.0
 licence: MIT
 """
 
+# TODO(feature): document language; eg. if (template.language == "french") then (use french) else (use topic language)
+# TODO(feature): document style; eg. if (template.style == "formal") then (use formal language) else (use informal language)
+# TODO(feature): document tone; eg. if (template.tone == "neutral") then (use neutral tone) else (use positive or negative tone)
+# TODO(feature): document length; eg. if (template.length == "short") then (use short sentences) else (use long sentences)
+# TODO(feature): Add a "create_summarization" action that creates a summarization of the document
+
+# TODO(feature): add a "cleanup" action that cleans up the document, checks, the language style, etc...
+# TODO(feature): idea for editing document.. each time that the the pipe is called, we can compare the document with the original document, and detect the changes.
+# TODO(feature): split list template in "detail template" adn "list only template names"
+# TODO(feature): support multiple actions; actions can be queued, to do many things toghether.
+# TODO(feature): add RETRIES MAYBE WITH "LIMITED" EXPONENTIAL BACKOPP TO API CALLS
+
+# TODO(fix): fix templates retrival from GIT
+# TODO(fix, verify): self.document = loaded_document not working in document in "memory" (file working)
+# TODO(fix): Remove section is not smart wants always "the section name" and not enterpretes the "section title"
+# TODO(fix,maybe fixed): when adding subsection the title contains the section title and the subsection title
+
+# TODO(enhancement): remove "smart" model and combine with "if user prompt start with [pattern] then do [action]"
+# TODO(enhancement): Requesting "delidate" operations like section removal, cuold be done asking confirm to the user, using messages["user"][0] and mesages["user"][1]
+
+# TODO(enhancement): refactor, putting "client" in the context
+
 import json
 import httpx
 import asyncio
@@ -21,7 +43,16 @@ import subprocess
 import shutil
 import glob
 from pydantic import BaseModel, Field
-from typing import  Union, Generator, Iterator
+from typing import Union, Generator, Iterator
+
+# RAG imports
+from open_webui.retrieval.utils import (
+    query_collection,
+    query_collection_with_hybrid_search,
+)
+from open_webui.retrieval.web.utils import get_web_loader
+from open_webui.retrieval.web.duckduckgo import search_duckduckgo
+
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -42,6 +73,10 @@ class Pipe:
             default="gpt-3.5-turbo",
             description="Model ID to use for generation (comma-separated for multiple models)"
         )
+        MAX_TOKENS: int = Field(
+            default=40000,
+            description="Maximum tokens per section generation"
+        )
         THINKING_API_HOST: str = Field(
             default="https://api.openai.com/v1",
             description="API Host URL for the thinking model"
@@ -54,6 +89,10 @@ class Pipe:
             default="gpt-4o",
             description="Model ID to use for thinking/action detection"
         )
+        MAX_THINKING_TOKENS: int = Field(
+            default=40000,
+            description="Maximum tokens for thinking"
+        )
         SMART_MODEL: bool = Field(
             default=True,
             description="Use the thinking model for action detection (true) or use hardcoded patterns (false)"
@@ -61,10 +100,6 @@ class Pipe:
         TEMPERATURE: float = Field(
             default=0.7,
             description="Temperature for generation"
-        )
-        MAX_TOKENS: int = Field(
-            default=1000,
-            description="Maximum tokens per section generation"
         )
         TIMEOUT: int = Field(
             default=300,
@@ -86,6 +121,30 @@ class Pipe:
             default="",
             description="Comma-separated list of Git repositories containing additional templates"
         )
+        ENABLE_RAG: bool = Field(
+            default=True,
+            description="Enable Retrieval Augmented Generation when creating document sections"
+        )
+        RELEVANCE_THRESHOLD: float = Field(
+            default=0.3,
+            description="Default relevance threshold to use for RAG (if empty, will use default value)"
+        )
+        RAG_RESULT_COUNT: int = Field(
+            default=5,
+            description="Number of documents to retrieve for RAG"
+        )
+        RAG_WEB_SEARCH: bool = Field(
+            default=False,
+            description="Enable web search retrieval for RAG"
+        )
+        RAG_WEB_SEARCH_ENGINE: str = Field(
+            default="duckduckgo",
+            description="Web search engine to use for RAG"
+        )
+        RAG_HYBRID_SEARCH: bool = Field(
+            default=True,
+            description="Use hybrid search (vector + reranking) for better results"
+        )
 
         class Config:
             json_schema_extra = {
@@ -101,6 +160,8 @@ class Pipe:
         self.valves = self.Valves()
         # In-memory store for documents
         self.documents = {}
+        # New flag: use the thinking model also for content generation
+        self.use_thinking_for_generation = True
 
         # Create necessary directories
         os.makedirs("/app/backend/data/doc_generator_pipe", exist_ok=True)
@@ -117,27 +178,27 @@ class Pipe:
                         "name": "introduction",
                         "title": "Introduction",
                         "prompt": "Write an introduction about {topic}. Provide context and background.",
-                        "sectionType": "generate",
-                        "children": []
+                        "sectionType": "free_text",
+                        "children": []  # No children for this section
                     },
                     {
                         "name": "body",
                         "title": "Main Content",
                         "prompt": "Provide detailed information about {topic}. Include key facts, analysis, and insights.",
-                        "sectionType": "generate",
+                        "sectionType": "free_text",
                         "children": [
                             {
                                 "name": "body_part1",
                                 "title": "Key Concepts",
                                 "prompt": "Explain the key concepts related to {topic}.",
-                                "sectionType": "generate",
+                                "sectionType": "free_text",
                                 "children": []
                             },
                             {
                                 "name": "body_part2",
                                 "title": "Analysis",
                                 "prompt": "Provide analysis and interpretation of {topic}.",
-                                "sectionType": "generate",
+                                "sectionType": "free_text",
                                 "children": []
                             }
                         ]
@@ -146,7 +207,7 @@ class Pipe:
                         "name": "conclusion",
                         "title": "Conclusion",
                         "prompt": "Write a conclusion summarizing the key points about {topic}.",
-                        "sectionType": "generate",
+                        "sectionType": "free_text",
                         "children": []
                     }
                 ]
@@ -159,43 +220,43 @@ class Pipe:
                         "name": "abstract",
                         "title": "Abstract",
                         "prompt": "Write a concise abstract for a research paper about {topic}.",
-                        "sectionType": "generate"
+                        "sectionType": "free_text"
                     },
                     {
                         "name": "introduction",
                         "title": "Introduction",
                         "prompt": "Write an academic introduction for research on {topic}. Include research questions.",
-                        "sectionType": "generate"
+                        "sectionType": "free_text"
                     },
                     {
                         "name": "literature",
                         "title": "Literature Review",
                         "prompt": "Provide a literature review for research on {topic}. Reference key studies and findings.",
-                        "sectionType": "generate"
+                        "sectionType": "free_text"
                     },
                     {
                         "name": "methodology",
                         "title": "Methodology",
                         "prompt": "Describe a research methodology for studying {topic}.",
-                        "sectionType": "generate"
+                        "sectionType": "free_text"
                     },
                     {
                         "name": "results",
                         "title": "Results and Discussion",
                         "prompt": "Present hypothetical results and discussion for research on {topic}.",
-                        "sectionType": "generate"
+                        "sectionType": "free_text"
                     },
                     {
                         "name": "conclusion",
                         "title": "Conclusion",
                         "prompt": "Write a conclusion for academic research on {topic}. Include limitations and future directions.",
-                        "sectionType": "generate"
+                        "sectionType": "free_text"
                     },
                     {
                         "name": "references",
                         "title": "References",
                         "prompt": "Generate a sample reference list for research on {topic}. Use proper academic citation format.",
-                        "sectionType": "generate"
+                        "sectionType": "free_text"
                     }
                 ]
             },
@@ -207,34 +268,46 @@ class Pipe:
                         "name": "introduction",
                         "title": "Introduction",
                         "prompt": "Write an introduction about {topic}. Provide context and background.",
-                        "sectionType": "generate",
+                        "sectionType": "free_text",
                         "children": []
                     },
                     {
-                        "name": "disclaimer",
-                        "title": "Disclaimer",
-                        "sectionType": "fixed",
-                        "template_text": "This document is for informational purposes only. The information provided is not legal or professional advice and should not be relied upon as such. Consult with appropriate experts before making decisions based on this content.",
+                        "name": "toc",
+                        "title": "Table of Contents",
+                        "prompt": "Generate a table of contents for the document.",
+                        "sectionType": "toc",
                         "children": []
                     },
                     {
-                        "name": "report_info",
-                        "title": "Report Information",
-                        "sectionType": "populate",
-                        "template_text": "Document ID: {doc_id}\nDate Generated: {date}\nAuthor: {author}\nVersion: {version}",
-                        "populateFields": [
-                            {"name": "doc_id", "prompt": "Generate a unique document ID for this report"},
-                            {"name": "date", "prompt": "Generate today's date in YYYY-MM-DD format"},
-                            {"name": "author", "prompt": "Generate an appropriate author name for a report on {topic}"},
-                            {"name": "version", "prompt": "Generate a version number for this document"}
-                        ],
-                        "children": []
+                        "name": "non_tech_stuff",
+                        "title": "Non-Technical Stuff",
+                        "prompt": "Write non-technical stuff about {topic}.",
+                        "sectionType": "empty",
+                        "children": [{
+                            "name": "disclaimer",
+                            "title": "Disclaimer",
+                            "sectionType": "fixed",
+                            "template_text": "This document is for informational purposes only. The information provided is not legal or professional advice and should not be relied upon as such. Consult with appropriate experts before making decisions based on this content.",
+                            "children": [{
+                                "name": "report_info",
+                                "title": "Report Information",
+                                "sectionType": "populate",
+                                "template_text": "Document ID: {doc_id}\nDate Generated: {date}\nAuthor: {author}\nVersion: {version}",
+                                "populateFields": [
+                                    {"name": "doc_id", "prompt": "Generate a unique document ID for this report"},
+                                    {"name": "date", "prompt": "Generate today's date in YYYY-MM-DD format"},
+                                    {"name": "author", "prompt": "Generate an appropriate author name for a report on {topic}"},
+                                    {"name": "version", "prompt": "Generate a version number for this document"}
+                                ],
+                                "children": []
+                            }]
+                        }]
                     },
                     {
                         "name": "main_content",
                         "title": "Main Content",
                         "prompt": "Write detailed content about {topic}.",
-                        "sectionType": "generate",
+                        "sectionType": "free_text",
                         "children": []
                     },
                     {
@@ -250,49 +323,16 @@ class Pipe:
                 "name": "Custom Document",
                 "description": "User-defined document structure",
                 "sections": [
-                    {
+                     {
                         "name": "sample_section",
                         "title": "Sample Section",
                         "prompt": "Generate a sample section for a document on {topic}.",
-                        "sectionType": "generate"
+                        "sectionType": "free_text"
                     }
                 ]
-            },
-            "test_advanced_fields": {
-                "name": "Test Advanced Fields",
-                "description": "Test advanced fields",
-                "sections": [
-                    {
-                        "name": "introduction",
-                        "title": "Introduction",
-                        "prompt": "Write an introduction about {topic}. Provide context and background.",
-                        "sectionType": "generate",
-                        "children": []
-                    },
-                    {
-                        "name": "report_info",
-                        "title": "Report Information",
-                        "sectionType": "populate",
-                        "template_text": "Document ID: {doc_id}\nDate Generated: {date}\nAuthor: {author}\nVersion: {version}",
-                        "populateFields": [
-                            {"name": "doc_id", "prompt": "Generate a unique document ID for this report"},
-                            {"name": "date", "prompt": "Generate today's date in YYYY-MM-DD format"},
-                            {"name": "author", "prompt": "Generate an appropriate author name for a report on {topic}"},
-                            {"name": "version", "prompt": "Generate a version number for this document"}
-                        ],
-                        "children": []
-                    },
-                    {
-                        "name": "copyright",
-                        "title": "Copyright Notice",
-                        "sectionType": "fixed",
-                        "template_text": "© 2023 Document Generator. All rights reserved. No part of this document may be reproduced without permission.",
-                        "children": []
-                    }
-                ]
-            },
+            }
         }
-
+        
         # Load templates from Git repositories and local storage
         self.load_git_templates()
         self._load_local_templates()
@@ -301,13 +341,17 @@ class Pipe:
 
         self.system_prompts = {
             "generic_init": (
-                "You are an AI assistant helping with document generation. The document is in markdown format. Do not add comments or opinions."
+                "You are an AI assistant helping with document generation. The document is in markdown format. Do not add comments or opinions. "
             ),
             "no_sections": (
-                "Do not include any additional sections marked by the '#' symbol, headings, or subsections."
+                "Do not include any additional sections marked by the '#' symbol, headings, or subsections. "
             ),
             "no_conclusions": (
-                "The response must not contain phrases like 'finally', 'in conclusion', 'in summary', or 'in the end'."
+                "The response must not contain phrases like 'finally', 'in conclusion', 'in summary', or 'in the end'. "
+            ),
+            "rag": (
+                "You are an AI assistant helping with document generation. You are given a topic and a prompt. You must generate a query for getting data from a Vector Database. You must give only the query, nothing else. You MUST not add comments, just the query." + 
+                "for example, if the prompt is 'generate  a section for the topic: 'capital of France',' and the topic is 'France', the query for getting data from a Vector Database should be 'What is the capital of France?'"
             )
         }
 
@@ -315,13 +359,19 @@ class Pipe:
         self.actions = {
             "write_full_doc": {
                 "description": "Generate a complete document",
+                "patterns": ["create", "free_text", "make a document", "prepare a document"],
                 "requires": [
                     {"name": "topic", "type": "string", "description": "The topic of the document"},
-                    {"name": "template_id", "type": "enum", "values": list(self.templates.keys()), "description": "The template to use for document generation"}
+                    {"name": "template_id", "type": "enum", "values": list(self.templates.keys()), "description": "The template to use for document generation"},
+                    {"name": "language", "type": "string", "description": "The language of the document"},
+                    {"name": "style", "type": "string", "description": "The style of the document"},
+                    {"name": "tone", "type": "string", "description": "The tone of the document"},
+                    {"name": "length", "type": "string", "description": "The length of the document"}
                 ]
             },
             "edit_section": {
                 "description": "Edit or regenerate a specific section",
+                "patterns": ["edit", "change", "modify", "update", "revise"],
                 "requires": [
                     {"name": "section_name", "type": "string", "description": "The name of the section to edit"},
                     {"name": "instructions", "type": "string", "description": "Editing instructions for the section"}
@@ -329,8 +379,9 @@ class Pipe:
             },
             "add_section": {
                 "description": "Add a new section or sub-section to the document",
+                "patterns": ["add", "insert", "include", "create section"],
                 "requires": [
-                    {"name": "section_title", "type": "string", "description": "The title for the new section"},
+                    {"name": "section_title", "type": "string", "description": "The title for the new section. NEVER  include: formatting, markdown, symbols, paragraph numbers or other section titles."},
                     {"name": "instructions", "type": "string", "description": "Instructions for the section content"}
                 ]
             },
@@ -342,10 +393,12 @@ class Pipe:
             },
             "summarize_doc": {
                 "description": "Summarize the existing document",
+                "patterns": ["summarize", "summary", "brief overview"],
                 "requires": []
             },
             "expand_section": {
                 "description": "Expand a specific section with more details",
+                "patterns": ["expand", "elaborate", "more details", "extend"],
                 "requires": [
                     {"name": "section_name", "type": "string", "description": "The name of the section to expand"},
                     {"name": "instructions", "type": "string", "description": "Instructions for expanding the section"}
@@ -353,6 +406,7 @@ class Pipe:
             },
             "rewrite_section": {
                 "description": "Rewrite a section in a different style",
+                "patterns": ["rewrite", "rephrase", "different style", "new style"],
                 "requires": [
                     {"name": "section_name", "type": "string", "description": "The name of the section to rewrite"},
                     {"name": "style", "type": "string", "description": "The style to rewrite the section in"}
@@ -360,22 +414,27 @@ class Pipe:
             },
             "list_sections": {
                 "description": "List all sections in the current document",
+                "patterns": ["list sections", "show sections", "what sections"],
                 "requires": []
             },
             "generate_tags": {
                 "description": "Generate tags for the chat content",
+                "patterns": ["generate 1-3 broad tags categorizing the main themes of the chat history"],
                 "requires": []
             },
             "list_actions": {
                 "description": "List all available actions with their descriptions",
+                "patterns": ["list actions", "show actions", "what actions"],
                 "requires": []
             },
             "get_all_templates": {
                 "description": "Display all available document templates",
+                "patterns": ["show templates", "list templates", "available templates", "get templates", "what templates"],
                 "requires": []
             },
             "generate_template": {
                 "description": "Generate a document template from a markdown document",
+                "patterns": ["generate template", "create template", "make template", "extract template"],
                 "requires": [
                     {"name": "markdown", "type": "string", "description": "Markdown document text to extract template from"}
                 ]
@@ -391,18 +450,21 @@ class Pipe:
             },
             "delete_template": {
                 "description": "Delete a document template",
+                "patterns": ["delete template", "remove template", "remove document template"],
                 "requires": [
                     {"name": "template_id", "type": "string", "description": "The ID of the template to delete"}
                 ]
             },
             "get_template_json": {
                 "description": "Get the JSON structure of a document template",
+                "patterns": ["get template", "get document template", "get template json", "get document template json"],
                 "requires": [
                     {"name": "template_id", "type": "string", "description": "The ID of the template to retrieve"}
                 ]
             },
             "update_template": {
                 "description": "Update a template with the provided JSON",
+                "patterns": ["update template", "update document template", "update template json", "update document template json"],
                 "requires": [
                     {"name": "template_id", "type": "string", "description": "The ID of the template to update"},
                     {"name": "template_json", "type": "string", "description": "The JSON structure for the template"}
@@ -422,7 +484,7 @@ class Pipe:
             })
         return options
 
-    async def pipe(self, body: dict, __event_emitter__=None, __metadata__=None) -> Union[str, Generator, Iterator]:
+    async def pipe(self, body: dict, __event_emitter__=None, __metadata__=None, __request__=None, __user__=None, __task__=None, __task_body__=None, __files__=None) -> Union[str, Generator, Iterator]:
         """
         Main pipeline handler that dispatches to specific action handlers.
         It extracts user messages, detects the action to perform, and then routes the request accordingly.
@@ -431,8 +493,33 @@ class Pipe:
         model_id = ""
         messages = []
         chat_id = __metadata__.get("chat_id", "default_chat")
+        request = __request__
+        user = __user__
+        collection_names = self.extract_collection_names(__metadata__) 
 
-        logger.info(f"Pipe body: {body}")
+        ctx= {
+            "chat_id": chat_id,
+            "request": request,
+            "user": user,
+            "task": __task__,
+            "task_body": __task_body__,
+            "files": __files__,
+            "metadata": __metadata__,
+            "collection_names": collection_names,
+            "event_emitter": __event_emitter__,
+            "body": body,
+            "generator": {
+                "headers": self._get_api_headers(self.valves.API_KEY),
+                "model_id": self.valves.MODEL_ID,
+            },
+            "thinker": {
+                "headers": self._get_api_headers(self.valves.THINKING_API_KEY or self.valves.API_KEY),
+                "model_id": self.valves.THINKING_MODEL_ID,
+            },
+            "rag": {
+                "use_rag": self.valves.ENABLE_RAG and len(collection_names) > 0,
+            }
+        }       
 
         # Extract user message from the last user entry
         if "messages" in body and body["messages"]:
@@ -446,19 +533,22 @@ class Pipe:
             model_id = body["model"]
             if "." in model_id:
                 model_id = model_id.split(".")[-1]
+            ctx["generator"]["model_id"] = model_id
 
         # If using file storage, try to load an existing document
+        ctx["document"] = None
         if self.valves.DOCUMENT_STORAGE == "file":
             loaded_document = self.load_document(chat_id)
             if loaded_document:
                 self.documents[chat_id] = loaded_document
                 self.document = loaded_document
                 logger.info(f"Loaded existing document for chat {chat_id}")
+                ctx["document"] = loaded_document
 
         # Validate API key
         if not self.valves.API_KEY:
-            if __event_emitter__:
-                await __event_emitter__({
+            if ctx["event_emitter"]:
+                await ctx["event_emitter"]({
                     "type": "status",
                     "data": {"description": "Error: API key not configured", "done": True}
                 })
@@ -466,7 +556,6 @@ class Pipe:
             return
 
         # Prepare request headers
-        headers = self._get_api_headers(self.valves.API_KEY)
 
         try:
             # Start thinking process
@@ -477,7 +566,7 @@ class Pipe:
             timeout = httpx.Timeout(self.valves.TIMEOUT, connect=5.0)
             async with httpx.AsyncClient(limits=limits, timeout=timeout) as client:
                 # Detect the action
-                action_result = await self.detect_action(client, user_message, headers)
+                action_result = await self.detect_action(client, user_message, ctx)
                 if "error" in action_result:
                     yield f"Error detecting action: {action_result['error']}\n"
                     yield "Falling back to default document generation...\n"
@@ -492,18 +581,18 @@ class Pipe:
 
                 # Dispatch to appropriate handler
                 if action == "generate_tags":
-                    result = await self.handle_generate_tags(client, user_message, headers)
+                    result = await self.handle_generate_tags(client, user_message, ctx)
                     logger.info(f"Generated tags: '{result}'")
                     yield result
                     return
                 elif action == "write_full_doc":
-                    async for chunk in self.handle_write_full_doc(client, chat_id, user_message, model_id, params, headers, __event_emitter__):
+                    async for chunk in self.handle_write_full_doc(client, chat_id, user_message, model_id, params, ctx):
                         yield chunk
                 elif action == "edit_section":
-                    async for chunk in self.handle_edit_section(client, chat_id, params, headers, __event_emitter__):
+                    async for chunk in self.handle_edit_section(client, chat_id, params, ctx):
                         yield chunk
                 elif action == "add_section":
-                    async for chunk in self.handle_add_section(client, chat_id, user_message, params, headers, __event_emitter__):
+                    async for chunk in self.handle_add_section(client, chat_id, user_message, params, ctx):
                         yield chunk
                 elif action == "remove_section":
                     async for chunk in self.handle_remove_section(chat_id, params):
@@ -512,13 +601,13 @@ class Pipe:
                     async for chunk in self.handle_list_sections(chat_id):
                         yield chunk
                 elif action == "summarize_doc":
-                    async for chunk in self.handle_summarize_doc(client, chat_id, params, headers, __event_emitter__):
+                    async for chunk in self.handle_summarize_doc(client, chat_id, params):
                         yield chunk
                 elif action == "expand_section":
-                    async for chunk in self.handle_expand_section(client, chat_id, params, headers, __event_emitter__):
+                    async for chunk in self.handle_expand_section(client, chat_id, params):
                         yield chunk
                 elif action == "rewrite_section":
-                    async for chunk in self.handle_rewrite_section(client, chat_id, params, headers, __event_emitter__):
+                    async for chunk in self.handle_rewrite_section(client, chat_id, params):
                         yield chunk
                 elif action == "list_actions":
                     async for chunk in self.handle_list_actions():
@@ -527,7 +616,7 @@ class Pipe:
                     async for chunk in self.handle_get_all_templates():
                         yield chunk
                 elif action == "generate_template":
-                    async for chunk in self.generate_template_from_markdown(client, user_message, headers):
+                    async for chunk in self.generate_template_from_markdown(client, user_message):
                         yield chunk
                 elif action == "print_document":
                     async for chunk in self.handle_print_document(chat_id):
@@ -562,57 +651,52 @@ class Pipe:
                 })
             yield "</think>\n\n"
 
-    async def detect_action(self, client, user_message, headers=None):
+    async def detect_action(self, client, user_message, ctx):
         """
         Detect the action requested by the user.
         Returns a dict with keys: action, parameters, and confidence.
         """
         lower_msg = user_message.lower()
-        # Check for tag generation request
         if "generate 1-3 broad tags categorizing the main themes of the chat history" in user_message:
             return {"action": "generate_tags", "parameters": {}, "confidence": 1.0}
 
-        # Help actions
-        help_patterns = ["help", "what can you do", "show actions", "available actions", "list actions"]
+        help_patterns = self.actions["list_actions"]["patterns"]
         if any(pattern in lower_msg for pattern in help_patterns):
             return {"action": "list_actions", "parameters": {}, "confidence": 1.0}
 
-        # Template list actions
-        template_patterns = ["show templates", "list templates", "available templates", "get templates", "what templates"]
+        template_patterns = self.actions["get_all_templates"]["patterns"]
         if any(pattern in lower_msg for pattern in template_patterns):
             return {"action": "get_all_templates", "parameters": {}, "confidence": 1.0}
 
-        # Template generation from markdown
-        template_gen_patterns = ["generate template", "create template", "make template", "extract template"]
+        template_gen_patterns = self.actions["generate_template"]["patterns"]
         if any(pattern in lower_msg for pattern in template_gen_patterns) and '#' in user_message:
             return {"action": "generate_template", "parameters": {"markdown": user_message}, "confidence": 0.9}
 
-        # If SMART_MODEL is false, use basic pattern matching
         if not self.valves.SMART_MODEL:
-            if any(p in lower_msg for p in ["write", "create", "generate", "make a document", "prepare a document"]):
+            if any(p in lower_msg for p in self.actions["write_full_doc"]["patterns"]):
                 template_id = self.valves.TEMPLATE_NAME
                 for tid in self.templates.keys():
                     if tid.lower() in lower_msg:
                         template_id = tid
                         break
                 return {"action": "write_full_doc", "parameters": {"topic": user_message, "template_id": template_id}, "confidence": 0.8}
-            elif any(p in lower_msg for p in ["edit", "change", "modify", "update", "revise"]):
+            elif any(p in lower_msg for p in self.actions["edit_section"]["patterns"]):
                 match = re.search(r'(edit|change|modify|update|revise)\s+(\w+)\s+section', lower_msg)
                 section_name = match.group(2) if match else "introduction"
                 return {"action": "edit_section", "parameters": {"section_name": section_name, "instructions": user_message}, "confidence": 0.7}
-            elif any(p in lower_msg for p in ["add", "insert", "include", "create section"]):
+            elif any(p in lower_msg for p in self.actions["add_section"]["patterns"]):
                 match = re.search(r'add\s+(?:a\s+)?(?:section|part)\s+(?:called|named|titled)?\s+["\']?([^"\']+)["\']?', lower_msg)
                 section_title = match.group(1) if match else "New Section"
                 return {"action": "add_section", "parameters": {"section_title": section_title, "instructions": user_message}, "confidence": 0.7}
-            elif any(p in lower_msg for p in ["list sections", "show sections", "what sections"]):
+            elif any(p in lower_msg for p in self.actions["list_sections"]["patterns"]):
                 return {"action": "list_sections", "parameters": {}, "confidence": 0.9}
-            elif any(p in lower_msg for p in ["summarize", "summary", "brief overview"]):
+            elif any(p in lower_msg for p in self.actions["summarize_doc"]["patterns"]):
                 return {"action": "summarize_doc", "parameters": {}, "confidence": 0.8}
-            elif any(p in lower_msg for p in ["expand", "elaborate", "more details", "extend"]):
+            elif any(p in lower_msg for p in self.actions["expand_section"]["patterns"]):
                 match = re.search(r'(expand|elaborate|extend)\s+(\w+)\s+section', lower_msg)
                 section_name = match.group(2) if match else ""
                 return {"action": "expand_section", "parameters": {"section_name": section_name, "instructions": user_message}, "confidence": 0.7}
-            elif any(p in lower_msg for p in ["rewrite", "rephrase", "different style", "new style"]):
+            elif any(p in lower_msg for p in self.actions["rewrite_section"]["patterns"]):
                 match = re.search(r'(rewrite|rephrase)\s+(\w+)\s+section', lower_msg)
                 style_match = re.search(r'(?:in|with|using)\s+(?:a\s+)?(\w+)\s+style', lower_msg)
                 section_name = match.group(2) if match else ""
@@ -621,12 +705,8 @@ class Pipe:
             else:
                 return {"action": "list_actions", "parameters": {}, "confidence": 0.6}
 
-        # Use the thinking model if SMART_MODEL is enabled
         logger.info(f"Detecting action using thinking model for message: {user_message}")
-        if not headers:
-            headers = self._get_api_headers(self.valves.THINKING_API_KEY or self.valves.API_KEY)
 
-        # Build a system prompt with available actions and requirements
         system_prompt = "You are an AI assistant helping with document generation and management tasks.\nAvailable actions:\n"
         for a_name, a_info in self.actions.items():
             reqs = []
@@ -642,18 +722,18 @@ class Pipe:
         system_prompt += (
             "\nAlways respond with a JSON array containing objects with these fields:\n"
             "- action: The action name\n- parameters: Relevant parameters (e.g., topic, section_name, etc.)\n- confidence: Your confidence (0.0-1.0)\n"
-            "\nExample response:\n[{{\"action\": \"write_full_doc\", \"parameters\": {{\"topic\": \"artificial intelligence\", \"template_id\": \"basic\"}}, \"confidence\": 0.9}}]"
+            "\nExample response:\n[{'action': 'write_full_doc', 'parameters': {'topic': 'artificial intelligence', 'template_id': 'basic'}, 'confidence': 0.9}]"
         )
         user_prompt = f"What document action should I take based on this request: '{user_message}'?"
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                return await self._query_thinking_model(client, system_prompt, user_prompt, extract_json=True, force_first_element=True)
+                return await self._query_thinking_model(client, system_prompt, user_prompt, extract_json=True, force_first_element=True, ctx=ctx)
             except Exception as e:
                 logger.error(f"Error detecting action on attempt {attempt+1}: {str(e)}")
                 if attempt == max_retries - 1:
                     raise
-                example_json = '[{"action": "write_full_doc", "parameters": {"topic": "example topic", "template_id": "basic"}, "confidence": 0.9}]'
+                example_json = "[{'action': 'write_full_doc', 'parameters': {'topic': 'example topic', 'template_id': 'basic'}, 'confidence': 0.9}]"
                 user_prompt = (f"I need a valid JSON response for this request: '{user_message}'\n"
                                f"Return ONLY a JSON array with a single action object, like this example:\n{example_json}\n"
                                f"Choose one of these actions: {', '.join(self.actions.keys())}")
@@ -661,9 +741,7 @@ class Pipe:
         return {"action": "list_actions", "parameters": {}, "confidence": 0.5}
 
     def _extract_json_from_response(self, content, force_first_element=False):
-        """
-        Extract JSON from a response that may contain <think> tags or other text.
-        """
+        # Remove <think> tags
         content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
         json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
         if json_match:
@@ -677,21 +755,24 @@ class Pipe:
                 content = json_match.group(0)
         try:
             data = json.loads(content)
-            if force_first_element and isinstance(data, list) and data:
-                return data[0]
-            return data
         except json.JSONDecodeError as e:
-            logger.error(f"JSON parsing error: {e} with content: {content}")
-            raise
+            # Attempt to convert single quotes to double quotes and try again
+            fixed_content = content.replace("'", '"')
+            data = json.loads(fixed_content)
+        if force_first_element and isinstance(data, list) and data:
+            return data[0]
+        return data
 
-    async def _stream_chat_response(self, client, url, payload, headers, timeout, max_retries=2):
+    async def _stream_response(self, client, base_url, endpoint, payload, ctx, headers, timeout, max_retries=10):
         """
-        Helper method to stream chat responses with retry logic.
-        Yields each JSON-decoded data chunk.
+        Common helper for streaming responses from a given base URL.
+        Filters out any text within <think>...</think> markers.
         """
+        inside_think = False  # tracks if we are currently inside a <think> block
+        buffer = ""  # accumulates text across chunks
         for attempt in range(max_retries + 1):
             try:
-                async with client.stream("POST", url, json=payload, headers=headers, timeout=timeout) as response:
+                async with client.stream("POST", f"{base_url}{endpoint}", json=payload, headers=headers, timeout=timeout) as response:
                     if response.status_code != 200:
                         error_text = await response.aread()
                         if attempt < max_retries:
@@ -701,22 +782,65 @@ class Pipe:
                         else:
                             yield {"error": f"API error ({response.status_code}): {error_text.decode('utf-8')}"}
                             return
+
                     async for chunk in response.aiter_bytes():
                         if not chunk:
                             continue
+                        # Decode and accumulate chunk text
                         chunk_str = chunk.decode('utf-8')
-                        for line in chunk_str.split('\n'):
-                            if line.startswith('data: ') and line.strip() != "data: [DONE]":
-                                try:
-                                    data = json.loads(line[6:])
-                                    yield data
-                                except json.JSONDecodeError as e:
-                                    logger.error(f"JSON parse error in stream: {e}")
-                return
+                        buffer += chunk_str
+
+                        # Process complete lines from the buffer
+                        while "\n" in buffer:
+                            line, buffer = buffer.split("\n", 1)
+                            # Only process lines that start with the expected prefix and aren't the DONE marker.
+                            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                                # Remove the 'data: ' prefix and filter out <think> sections.
+                                content = line[6:]
+                                filtered_content = ""
+                                pos = 0
+                                while pos < len(content):
+                                    if not inside_think:
+                                        # Look for the start of a <think> block.
+                                        start_idx = content.find("<think>", pos)
+                                        if start_idx == -1:
+                                            # No <think> tag: take the rest of the content.
+                                            filtered_content += content[pos:]
+                                            break
+                                        else:
+                                            # Append the text before <think> and mark that we're inside.
+                                            filtered_content += content[pos:start_idx]
+                                            pos = start_idx + len("<think>")
+                                            inside_think = True
+                                    else:
+                                        # Already inside a <think> block: look for its end.
+                                        end_idx = content.find("</think>", pos)
+                                        if end_idx == -1:
+                                            # No closing tag in this chunk: discard the rest.
+                                            pos = len(content)
+                                            break
+                                        else:
+                                            pos = end_idx + len("</think>")
+                                            inside_think = False
+                                if filtered_content.strip():
+                                    try:
+                                        data = json.loads(filtered_content)
+                                        yield data
+                                    except json.JSONDecodeError as e:
+                                        # logger.error(f"JSON parse error in stream: {e}")
+                                        pass
+                                else:
+                                    logger.debug("Skipped empty filtered content")
+                    return
             except httpx.TimeoutException:
                 if attempt < max_retries:
                     logger.error("Request timed out, retrying...")
-                    await asyncio.sleep(5)
+                    wait_time = 2**(attempt+1)
+                    ctx["event_emitter"]({
+                        "type": "status",
+                        "data": {"description": f"Request timed out, retrying in {wait_time} seconds", "done": False}
+                    })
+                    await asyncio.sleep(wait_time)
                     continue
                 else:
                     yield {"error": f"Request timed out after {timeout} seconds"}
@@ -724,18 +848,75 @@ class Pipe:
             except Exception as e:
                 if attempt < max_retries:
                     logger.error(f"Exception in stream: {str(e)}, retrying...")
-                    await asyncio.sleep(5)
+                    wait_time = 2**(attempt+1)
+                    ctx["event_emitter"]({
+                        "type": "status",
+                        "data": {"description": f"Exception in stream: {str(e)}, retrying in {wait_time} seconds", "done": False}
+                    })
+                    await asyncio.sleep(wait_time)
                     continue
                 else:
                     yield {"error": str(e)}
                     return
 
-    async def generate_section(self, client, model_id, section, topic, headers):
+    async def _call_api(self, client, endpoint, payload, ctx, timeout, stream=False):
         """
-        Generate a single section using the API with streaming.
+        Make a call to the regular API_HOST.
         """
-        section_type = section.get("sectionType", "generate")
+        base_url = self.valves.API_HOST
+        if stream:
+            return self._stream_response(client, base_url, endpoint, payload, ctx, self._get_api_headers(self.valves.API_KEY), timeout)
+        else:
+            response = await client.post(f"{base_url}{endpoint}", json=payload, headers=self._get_api_headers(self.valves.API_KEY) , timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+
+    async def _call_thinking_api(self, client, endpoint, payload, ctx, timeout, stream=False):
+        """
+        Make a call to the THINKING_API_HOST.
+        """
+        base_url = self.valves.THINKING_API_HOST
+        payload["model"] = self.valves.THINKING_MODEL_ID
+        logger.info(f"Calling thinking API with payload: {payload}")
+        if stream:
+            return self._stream_response(client, base_url, endpoint, payload, ctx, self._get_api_headers(self.valves.THINKING_API_KEY or self.valves.API_KEY), timeout)
+        else:
+            response = await client.post(f"{base_url}{endpoint}", json=payload, headers=self._get_api_headers(self.valves.THINKING_API_KEY or self.valves.API_KEY) , timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+
+    async def generate_section(self, client, section, document, ctx, instructions=None):
+
+        """
+        Generate a single section using a streaming API call.
+        If use_thinking_for_generation is True, use the thinking model and remove any <think> tags.
+        """
+        section_type = section.get("sectionType", "free_text")
         system_prompt = self.system_prompts["generic_init"]
+
+        topic = document.get("topic", "")
+        language = document.get("language", "english")
+        style = document.get("style", "neutral")
+        tone = document.get("tone", "neutral")
+        length = document.get("length", "medium")
+
+        prompt = section.get("prompt", "").replace("{topic}", topic)
+
+        logger.info(f"Section: {section}, instructions: {instructions}")
+
+        rag_context = ""
+        logger.info(f"Generating section: {section['title']}, type: {section_type}, instructions: {instructions}, topic: {topic}, language: {language}, style: {style}, tone: {tone}, length: {length}")
+        # Prepare system prompt with RAG context if available
+        system_prompt = self.system_prompts["generic_init"]
+
+        if ctx["rag"]["use_rag"] and (section_type == "free_text" or section_type == "populate"):
+            rag_system_prompt = self.system_prompts["rag"]
+            rag_user_prompt = f"What is the query for getting data from a Vector Database for the following topic: '{topic}' and the following prompt: '{prompt}'?"
+            rag_query = await self._query_thinking_model(client, rag_system_prompt, rag_user_prompt, ctx=ctx, extract_json=False)
+            rag_query = re.sub(r'<think>.*?</think>', '', rag_query, flags=re.DOTALL)
+            logger.info(f"RAG query: {rag_query}")
+            rag_context, docs_count = await self._get_rag_context(ctx, topic, rag_query)
+            yield {"content_piece": f"RAG query: {rag_query.strip()} ({docs_count} results)\n"}
 
         if section_type == "fixed":
             yield {"content": section.get("template_text", ""), "status": "complete"}
@@ -748,13 +929,16 @@ class Pipe:
                 field_name = field.get("name", "")
                 field_prompt = field.get("prompt", "").format(topic=topic)
                 system_prompt += (
-                    "You are given a field prompt and a topic. Generate a plain text value for the field without markdown formatting. "
-                    f"This is for the section \"{section['title']}\". Provide only the field content."
+                    "You are given a field prompt and a topic. Generate a plain text value for the field without any additional conversation or formatting. "
+                    "Return only the final answer and nothing else. the language of the document is {language}."
+                    f"This is for the section \"{section['title']}\"."
                 )
+                if rag_context:
+                    system_prompt += f"\n\nThis infomration could help you in writing your response:\n\n{rag_context}\n\n"
                 field_value = ""
                 try:
                     payload = {
-                        "model": model_id,
+                        "model": self.valves.MODEL_ID,
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": field_prompt}
@@ -763,15 +947,9 @@ class Pipe:
                         "max_tokens": min(200, self.valves.MAX_TOKENS),
                         "stream": False,
                     }
-                    response = await client.post(
-                        f"{self.valves.API_HOST}/chat/completions",
-                        json=payload,
-                        headers=headers,
-                        timeout=self.valves.REQUEST_TIMEOUT
-                    )
-                    response.raise_for_status()
-                    response_data = response.json()
-                    field_value = response_data.get("choices", [])[0].get("message", {}).get("content", "").strip()
+                    # For field generation we always use API_HOST
+                    result = await self._call_api(client, "/chat/completions", payload, ctx, self.valves.REQUEST_TIMEOUT, stream=False)
+                    field_value = result.get("choices", [])[0].get("message", {}).get("content", "").strip()
                     populated_content = populated_content.replace(f"{{{field_name}}}", field_value)
                     yield {"content_piece": f"Generated value for {field_name}: {field_value}\n"}
                 except Exception as e:
@@ -788,28 +966,50 @@ class Pipe:
             return
 
         document_structure = self._generate_document_outline(section)
-        prompt = section["prompt"].format(topic=topic)
+        prompt = ""
+        logger.info(f"Document structure: {document_structure}, instructions: {instructions}")
+        if instructions:
+            prompt = (f"Edit the section \"{section['title']}\" according to these instructions: {instructions}\n\n"
+                f"Current content:\n{document['sections'][section['name']]}\n\n"
+                "Provide the complete edited section, only the content, no title or other text.")
+        else:
+            prompt = section["prompt"].format(topic=topic)
         system_prompt += (
             f"{self.system_prompts['no_sections']}"
             f"You are generating content for a document on the topic: '{topic}'.\n"
             f"Document structure:\n{document_structure}\n\n"
-            f"Generate a single paragraph for the section \"{section['title']}\". "
+            f"Generate or edit, according to the instructions, a single paragraph for the section \"{section['title']}\". "
+            f"The language of the document is {language}. "
+            f"The style of the document is {style}. "
+            f"The tone of the document is {tone}. "
+            f"The length of the response should be {length}. "
             f"{self.system_prompts['no_conclusions']}"
         )
+        logger.info(f"System prompt: {system_prompt}")
+        messages = [
+            {"role": "system", "content": system_prompt},
+        ]
+        
+        if rag_context:
+            messages.append({"role": "user", "content": f"This infomration could help you in writing your response:\n\n{rag_context}\n\n"})
+        
+        messages.append({"role": "user", "content": prompt})
+
         payload = {
-            "model": model_id,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
+            "model": self.valves.MODEL_ID,
+            "messages": messages,
             "temperature": self.valves.TEMPERATURE,
             "max_tokens": self.valves.MAX_TOKENS,
             "stream": True,
         }
-        logger.info(f"Generating section with payload: {payload['messages']}")
-        timeout = httpx.Timeout(self.valves.REQUEST_TIMEOUT, connect=5.0)
+        # Determine which host to use based on the flag
+        if self.use_thinking_for_generation:
+            stream_gen = await self._call_thinking_api(client, "/chat/completions", payload, ctx, self.valves.REQUEST_TIMEOUT, stream=True)
+        else:
+            stream_gen = await self._call_api(client, "/chat/completions", payload, ctx, self.valves.REQUEST_TIMEOUT, stream=True)
+
         content_buffer = ""
-        async for data in self._stream_chat_response(client, f"{self.valves.API_HOST}/chat/completions", payload, headers, timeout):
+        async for data in stream_gen:
             if "error" in data:
                 logger.error(f"Section generation error: {data['error']}")
                 yield {"content": "", "status": "complete"}
@@ -820,6 +1020,9 @@ class Pipe:
                     piece = delta["content"]
                     content_buffer += piece
                     yield {"content_piece": piece}
+        # If using thinking model for generation, remove any <think> markers.
+        if self.use_thinking_for_generation:
+            content_buffer = re.sub(r'<think>.*?</think>', '', content_buffer, flags=re.DOTALL)
         yield {"content": content_buffer, "status": "complete"}
 
     def _generate_document_outline(self, current_section):
@@ -834,7 +1037,7 @@ class Pipe:
                     for s in sections:
                         if s["name"] == section_name:
                             return True
-                        if "children" in s and s["children"]:
+                        if s.get("children"):
                             if find_in_sections(s["children"], section_name):
                                 return True
                     return False
@@ -857,19 +1060,24 @@ class Pipe:
         for s in sections:
             if s["name"] == section_name:
                 return s
-            if "children" in s and s["children"]:
+            if s.get("children"):
                 result = self.find_section_in_template(s["children"], section_name)
                 if result:
                     return result
         return None
 
-    async def edit_document_section(self, client, model_id, section_name, document, instructions, headers):
+    async def edit_document_section(self, client, section_name, document, instructions, ctx):
         """Edit an existing section of the document."""
         section_content = document["sections"].get(section_name, "")
         section_info = self.find_section_in_template(document["template"]["sections"], section_name)
         system_prompt = self.system_prompts["generic_init"]
         document_structure = self._generate_document_outline(section_info)
         topic = document.get("topic", "Unknown")
+        
+        rag_context = ""
+        if ctx["rag"]["use_rag"]:
+            rag_context = await self._get_rag_context(ctx, topic, section_content)
+
         system_prompt += (
             f"{self.system_prompts['no_sections']}"
             f"You are editing a document on the topic: '{topic}'.\n"
@@ -884,20 +1092,24 @@ class Pipe:
                   f"Section: {section_info['title']}\n\n"
                   f"Current content:\n{section_content}\n\n"
                   "Provide the complete edited section:")
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+        ]
+        if rag_context:
+            messages.append({"role": "user", "content": f"This infomration could help you in writing your response:\n\n{rag_context}\n\n"})
+        messages.append({"role": "user", "content": prompt})
+        
         payload = {
-            "model": model_id,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
+            "model": self.valves.MODEL_ID,
+            "messages": messages,
             "temperature": self.valves.TEMPERATURE,
             "max_tokens": self.valves.MAX_TOKENS,
             "stream": True,
         }
-        logger.info(f"Editing section with payload: {payload['messages']}")
         timeout = httpx.Timeout(self.valves.REQUEST_TIMEOUT, connect=5.0)
         content_buffer = ""
-        async for data in self._stream_chat_response(client, f"{self.valves.API_HOST}/chat/completions", payload, headers, timeout):
+        async for data in await self._call_api(client, "/chat/completions", payload, ctx, timeout, stream=True):
             if "error" in data:
                 yield {"error": data["error"]}
                 break
@@ -909,7 +1121,7 @@ class Pipe:
                     yield {"content_piece": piece}
         yield {"content": content_buffer, "status": "complete"}
 
-    async def add_document_section(self, client, model_id, document, section_title, instructions, headers):
+    async def add_document_section(self, client, document, section_title, instructions, ctx):
         """Add a new section to the document."""
         base_name = re.sub(r'[^a-z0-9]', '', section_title.lower())
         section_name = base_name
@@ -928,20 +1140,27 @@ class Pipe:
             f"{self.system_prompts['no_conclusions']}"
         )
         prompt = f"Create a new document section titled \"{section_title}\" according to these instructions: {instructions}"
+        if  ctx["rag"]["use_rag"]:
+            rag_context = await self._get_rag_context(ctx, topic, "")
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+        ]
+        if rag_context:
+            messages.append({"role": "user", "content": f"This infomration could help you in writing your response:\n\n{rag_context}\n\n"})
+        messages.append({"role": "user", "content": prompt})
+
         payload = {
-            "model": model_id,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
+            "model": self.valves.MODEL_ID,
+            "messages": messages,
             "temperature": self.valves.TEMPERATURE,
             "max_tokens": self.valves.MAX_TOKENS,
             "stream": True,
         }
-        logger.info(f"Adding section with payload: {payload['messages']}")
+
         timeout = httpx.Timeout(self.valves.REQUEST_TIMEOUT, connect=5.0)
         content_buffer = ""
-        async for data in self._stream_chat_response(client, f"{self.valves.API_HOST}/chat/completions", payload, headers, timeout):
+        async for data in await self._call_api(client, "/chat/completions", payload, ctx, timeout, stream=True):
             if "error" in data:
                 yield {"error": data["error"]}
                 break
@@ -965,10 +1184,15 @@ class Pipe:
             "section_metadata": new_section
         }
 
-    async def handle_write_full_doc(self, client, chat_id, user_message, model_id, params, headers, __event_emitter__=None):
+    async def handle_write_full_doc(self, client, chat_id, user_message, model_id, params, ctx):
         """Handle generating a full document."""
         topic = params.get("topic", user_message).strip()
+        language = params.get("language", "english").strip()
+        style = params.get("style", "neutral").strip()
+        tone = params.get("tone", "neutral").strip()
+        length = params.get("length", "medium").strip()
         template_id = params.get("template_id", self.valves.TEMPLATE_NAME)
+
         if not topic:
             yield "Error: No topic provided. Please specify a topic for the document."
             yield "</think>\n\n"
@@ -977,21 +1201,28 @@ class Pipe:
             template_id = self.valves.TEMPLATE_NAME
         template = self.templates[template_id]
         llm_model_id = model_id.split(":", 1)[0] if ":" in model_id else model_id
-        if __event_emitter__:
-            await __event_emitter__({
+        if ctx["event_emitter"]:
+            await ctx["event_emitter"]({
                 "type": "status",
                 "data": {"description": f"Generating document on '{topic}'", "done": False}
             })
-        yield f"Generating full document on '{topic}' using template: {template['name']}\n\n"
+        yield f"📒 Generating full document on '{topic}' using template: {template['name']}\n\n"
+
         document = {
             "topic": topic,
             "template": template,
+            "language": language,
+            "style": style,
+            "tone": tone,
+            "length": length,
             "model_id": llm_model_id,
             "sections": {},
             "created_at": time.time(),
             "updated_at": time.time()
         }
-        async for chunk in self.generate_document(client, llm_model_id, template, topic, headers):
+
+
+        async for chunk in self.generate_document(client, llm_model_id, template, topic, ctx):
             yield chunk
         if hasattr(self, 'current_document') and self.current_document:
             document = self.current_document
@@ -1002,7 +1233,7 @@ class Pipe:
         yield "</think>\n\n"
         yield self.format_document(document)
 
-    async def handle_edit_section(self, client, chat_id, params, headers, __event_emitter__=None):
+    async def handle_edit_section(self, client, chat_id, params, ctx=None):
         """Handle editing a specific section."""
         section_name = params.get("section_name", "")
         instructions = params.get("instructions", "Improve this section")
@@ -1011,8 +1242,7 @@ class Pipe:
             yield "</think>\n\n"
             return
         document = self.documents[chat_id]
-        llm_model_id = document["model_id"]
-        section, section_path = self.find_section_by_name(document, section_name)
+        section, _ = self.find_section_by_name(document, section_name)
         if not section or section["name"] not in document["sections"]:
             yield f"Section '{section_name}' not found in the document.\n"
             yield "Available sections:\n"
@@ -1022,13 +1252,13 @@ class Pipe:
         section_title = section["title"]
         section_name = section["name"]
         yield f"Editing section: {section_title} ({section_name}) with instructions: {instructions}\n\n"
-        if __event_emitter__:
-            await __event_emitter__({
+        if ctx["event_emitter"]:
+            await ctx["event_emitter"]({
                 "type": "status",
                 "data": {"description": f"Editing section: {section_title}", "done": False}
             })
         section_content = ""
-        async for chunk in self.edit_document_section(client, llm_model_id, section_name, document, instructions, headers):
+        async for chunk in self.generate_section(client, section, document, ctx, instructions):
             if "error" in chunk:
                 yield f"Error editing section: {chunk['error']}\n"
                 break
@@ -1043,7 +1273,7 @@ class Pipe:
         yield "</think>\n\n"
         yield self.format_document(document, highlight_section=section_name)
 
-    async def determine_section_position(self, client, document, section_title, position_info, headers):
+    async def determine_section_position(self, client, document, section_title, position_info, ctx):
         """
         Determine where to place a new section in the document based on user instructions.
         Returns positioning information including parent section and reference section.
@@ -1082,7 +1312,7 @@ class Pipe:
             "Return the positioning as a JSON object."
         )
         try:
-            position_data = await self._query_thinking_model(client, system_prompt, user_prompt, extract_json=True, force_first_element=True)
+            position_data = await self._query_thinking_model(client, system_prompt, user_prompt, ctx=ctx, extract_json=True, force_first_element=True)
             for field in ["reference_section", "position"]:
                 if field not in position_data:
                     position_data[field] = "end" if field == "reference_section" else "after"
@@ -1091,7 +1321,7 @@ class Pipe:
             logger.error(f"Error determining section position: {e}")
             return {"parent_section": None, "reference_section": "end", "position": "after", "explanation": f"Default due to error: {e}"}
 
-    def insert_section_into_document(self, document, section_metadata, position_data):
+    def insert_section_into_document(self, document, section_metadata, position_data): 
         """
         Insert a new section into the document template at the specified position.
         """
@@ -1101,39 +1331,77 @@ class Pipe:
             reference_section = position_data.get("reference_section")
             position = position_data.get("position", "after")
             parent_section = position_data.get("parent_section")
-            is_sub_section = position_data.get("is_nested_sub_section", False)
+            is_nested_sub_section = position_data.get("is_nested_sub_section", False)
+
+            # If the insertion is nested and a parent section is provided:
+            if is_nested_sub_section and parent_section:
+                # Helper function to locate a section by name recursively.
+                def find_section(sections, target):
+                    for sec in sections:
+                        if sec.get("name") == target:
+                            return sec
+                        if sec.get("children"):
+                            found = find_section(sec["children"], target)
+                            if found:
+                                return found
+                    return None
+
+                parent_node = find_section(document["template"]["sections"], parent_section)
+                if parent_node is None:
+                    logger.warning(f"Parent section {parent_section} not found. Inserting at root.")
+                    document["template"]["sections"].append(section_metadata)
+                    return True
+
+                # If a reference_section is provided, try to insert relative to it within parent's children.
+                if reference_section:
+                    children = parent_node.setdefault("children", [])
+                    # Find the index of the reference_section among the parent's children.
+                    index = next((i for i, child in enumerate(children) if child.get("name") == reference_section), None)
+                    if index is not None:
+                        if position == "before":
+                            children.insert(index, section_metadata)
+                        else:  # position == "after"
+                            children.insert(index + 1, section_metadata)
+                        logger.info(f"Inserted nested section under '{parent_section}' relative to '{reference_section}'.")
+                        return True
+                    else:
+                        # If reference not found among parent's children, simply append.
+                        children.append(section_metadata)
+                        logger.info(f"Reference section '{reference_section}' not found in parent '{parent_section}'. Appended section as nested subsection.")
+                        return True
+                else:
+                    # No reference_section provided: append to the parent's children.
+                    parent_node.setdefault("children", []).append(section_metadata)
+                    logger.info(f"Inserted nested section under '{parent_section}' at the end.")
+                    return True
+
+            # For non-nested insertion or when parent_section is not provided:
             if reference_section == "end" or not reference_section:
                 logger.info("Adding section to the end of document")
                 document["template"]["sections"].append(section_metadata)
                 return True
 
+            # Otherwise, search the entire document structure for the reference_section (non-nested insertion).
             def find_and_insert(sections, parent_name=None):
                 for i, sec in enumerate(sections):
-                    if sec["name"] == reference_section:
+                    if sec.get("name") == reference_section:
                         logger.info(f"Found reference section: {sec['name']} at level {parent_name or 'root'}")
-                        if is_sub_section:
-                            sec.setdefault("children", []).append(section_metadata)
-                            return True
-                        if parent_section and parent_name != parent_section:
-                            continue
                         if position == "before":
                             sections.insert(i, section_metadata)
                         else:
                             sections.insert(i + 1, section_metadata)
                         return True
                     if sec.get("children"):
-                        if find_and_insert(sec["children"], sec["name"]):
+                        if find_and_insert(sec["children"], sec.get("name")):
                             return True
-                if parent_section == parent_name:
-                    sections.append(section_metadata)
-                    return True
                 return False
 
             success = find_and_insert(document["template"]["sections"])
             if not success:
-                logger.warning(f"Reference section {reference_section} not found. Adding at end.")
+                logger.warning(f"Reference section '{reference_section}' not found. Adding at end.")
                 document["template"]["sections"].append(section_metadata)
             return True
+
         except Exception as e:
             logger.error(f"Error inserting section: {e}")
             try:
@@ -1142,53 +1410,58 @@ class Pipe:
             except Exception:
                 return False
 
-    async def handle_add_section(self, client, chat_id, user_message, params, headers, __event_emitter__=None):
+    async def handle_add_section(self, client, chat_id, user_message, params, ctx):
         """Handle adding a new section to the document."""
+
         section_title = params.get("section_title", "New Section")
-        instructions = params.get("instructions", "Add content for this section")
-        yield f"Adding new section: {section_title} with instructions: {instructions}\n\n"
+        section= {
+            "name": re.sub(r'[^a-z0-9]', '', section_title.lower()),
+            "title": section_title,
+            "sectionType": "free_text",
+            "prompt": params.get("instructions", "Add content for this section"),
+            "children": []
+        }
+        section_name = section["name"]
+
+        yield f"Adding new section: {section_title} with instructions: {section['prompt']}\n\n"
         yield f"Analyzing where to place the section based on: {user_message}\n"
         try:
-            position_data = await self.determine_section_position(client, self.documents[chat_id], section_title, user_message, headers)
+            position_data = await self.determine_section_position(client, self.documents[chat_id], section_title, user_message, ctx)
             yield f"Position determined: {json.dumps(position_data, indent=2)}\n\n"
         except Exception as e:
             logger.error(f"Error in position determination: {e}")
             position_data = {"parent_section": None, "reference_section": "end", "position": "after", "explanation": "Default due to error"}
             yield f"Error determining position: {e}. Adding to the end of document.\n\n"
-        if __event_emitter__:
-            await __event_emitter__({
+        if ctx["event_emitter"]:
+            await ctx["event_emitter"]({
                 "type": "status",
                 "data": {"description": f"Adding section: {section_title}", "done": False}
             })
         section_content = ""
-        section_name = None
-        section_metadata = None
-        async for chunk in self.add_document_section(client, self.documents[chat_id]["model_id"], self.documents[chat_id], section_title, instructions, headers):
+        document = self.documents[chat_id]
+
+        async for chunk in self.generate_section(client, section, document, ctx, instructions=section['prompt']):
             if "error" in chunk:
                 yield f"Error adding section: {chunk['error']}\n"
                 break
             elif "content_piece" in chunk:
                 section_content += chunk["content_piece"]
-                section_name = chunk.get("section_name", section_name)
                 yield f"{chunk['content_piece']}"
             elif "status" in chunk and chunk["status"] == "complete":
                 section_content = chunk.get("content", section_content)
-                section_name = chunk.get("section_name", section_name)
-                section_metadata = chunk.get("section_metadata")
-                if section_name and section_metadata:
-                    self.documents[chat_id]["sections"][section_name] = section_content
-                    success = self.insert_section_into_document(self.documents[chat_id], section_metadata, position_data)
-                    if success:
-                        self.documents[chat_id]["updated_at"] = time.time()
-                        self.save_document(chat_id, self.documents[chat_id])
-                        yield f"\nCompleted adding section: {section_title}\nSection placed {position_data.get('position', 'after')} {position_data.get('reference_section', 'the end')}\n"
-                    else:
-                        yield "\nError positioning the section. Added at the end instead.\n"
-                        self.documents[chat_id]["template"]["sections"].append(section_metadata)
-                        self.documents[chat_id]["updated_at"] = time.time()
-                        self.save_document(chat_id, self.documents[chat_id])
+                document["sections"][section_name] = section_content
+                success = self.insert_section_into_document(document, section, position_data)
+                if success:
+                    document["updated_at"] = time.time()
+                    self.save_document(chat_id, document)
+                    yield f"\nCompleted adding section: {section_title}\nSection placed {position_data.get('position', 'after')} {position_data.get('reference_section', 'the end')}\n"
+                else:
+                    yield "\nError positioning the section. Added at the end instead.\n"
+                    document["template"]["sections"].append(section)
+                    document["updated_at"] = time.time()
+                    self.save_document(chat_id, document)
         yield "</think>\n\n"
-        yield self.format_document(self.documents[chat_id], highlight_section=section_name)
+        yield self.format_document(document, highlight_section=section_name)
 
     async def handle_list_sections(self, chat_id):
         """Handle listing all sections in the document."""
@@ -1201,19 +1474,19 @@ class Pipe:
         yield "</think>\n\n"
         yield self.list_document_sections(document)
 
-    async def handle_summarize_doc(self, client, chat_id, params, headers, __event_emitter__=None):
+    async def handle_summarize_doc(self, client, chat_id, params):
         """Handle summarizing the existing document."""
         yield "Summarize document action not fully implemented yet."
         yield "</think>\n\n"
         yield "# Document Summary\n\nThis feature is coming soon!"
 
-    async def handle_expand_section(self, client, chat_id, params, headers, __event_emitter__=None):
+    async def handle_expand_section(self, client, chat_id, params):
         """Handle expanding a specific section with more details."""
         yield "Expand section action not fully implemented yet."
         yield "</think>\n\n"
         yield "# Section Expansion\n\nThis feature is coming soon!"
 
-    async def handle_rewrite_section(self, client, chat_id, params, headers, __event_emitter__=None):
+    async def handle_rewrite_section(self, client, chat_id, params):
         """Handle rewriting a section in a different style."""
         yield "Rewrite section action not fully implemented yet."
         yield "</think>\n\n"
@@ -1245,19 +1518,14 @@ class Pipe:
         def format_section(sec, level=2):
             sec_key = sec["name"]
             heading = "#" * level
-            sec_type = sec.get("sectionType", "generate")
+            sec_type = sec.get("sectionType", "free_text")
             if sec_key in document["sections"] or sec_type in ["empty", "toc"]:
                 if sec_type == "toc":
-#                    output.append(f"{heading} {sec['title']} (Table of Contents{' - Updated' if sec_key == highlight_section else ''})\n")
                     output.append(f"{heading} {sec['title']}\n")
                     for entry in toc_entries:
-                        output.append(f"{'  ' * entry['indent']}[{entry['title']}](#{entry['name']})\n")
+                        output.append(f"[{'-' * entry['indent']}{entry['title']}](#{entry['name']})\n")
                     output.append("\n")
-                # elif sec_type == "empty":
-                #     # output.append(f"{heading} {sec['title']} ({'Empty Section - Updated' if sec_key == highlight_section else 'Empty Section'})\n\n")
-                #     output.append(f"{heading} {sec['title']} ({'Empty Section - Updated' if sec_key == highlight_section else 'Empty Section'})\n\n")
                 else:
-                    # label = "(Fixed Section" if sec_type == "fixed" else ("(Template Section" if sec_type == "populate" else "(Updated)" if sec_key == highlight_section else "") + ")"
                     label = ""
                     output.append(f"{heading} {sec['title']} {label}\u007b#{sec['name']}\u007d\n\n")
                     if sec_type != "empty" and sec_key in document["sections"]:
@@ -1315,7 +1583,7 @@ class Pipe:
             logger.error(f"Error loading document: {e}")
             return None
 
-    async def generate_document(self, client, llm_model_id, template, topic, headers):
+    async def generate_document(self, client, llm_model_id, template, topic, ctx):
         """Generate a complete document with nested sections."""
         document = {
             "topic": topic,
@@ -1332,7 +1600,7 @@ class Pipe:
             yield f"Generating section: {sec_name}...\n"
             section_content = ""
             has_error = False
-            async for chunk in self.generate_section(client, llm_model_id, sec, topic, headers):
+            async for chunk in self.generate_section(client, sec, document, ctx):
                 if "error" in chunk:
                     yield f"Failed to generate section '{sec_name}'. Moving to next section...\n"
                     has_error = True
@@ -1383,7 +1651,7 @@ class Pipe:
                 prefix = "  " * indent + "- "
                 if sec_name in document["sections"]:
                     word_count = len(document["sections"][sec_name].split())
-                    output.append(f"{prefix}**{sec_title}** ({word_count} words) {sec_name}\n")
+                    output.append(f"{prefix}**{sec_title}** ({word_count} words) `{sec_name}`\n")
                 else:
                     output.append(f"{prefix}{sec_title} (not generated)\n")
                 if sec.get("children"):
@@ -1480,7 +1748,7 @@ class Pipe:
             except Exception as e:
                 logger.error(f"Error loading template from {template_file}: {e}")
 
-    async def handle_generate_tags(self, client, message, headers):
+    async def handle_generate_tags(self, client, message, ctx):
         """Handle generating tags for the chat content."""
         logger.info("Generating tags for chat content")
         system_prompt = (
@@ -1488,7 +1756,7 @@ class Pipe:
             "Return only a JSON object with a 'tags' field."
         )
         try:
-            content = await self._query_thinking_model(client, system_prompt, message, extract_json=True)
+            content = await self._query_thinking_model(client, system_prompt, message, ctx=ctx, extract_json=True)
             logger.info(f"Generated tags: {content}")
             return content
         except Exception as e:
@@ -1568,7 +1836,7 @@ class Pipe:
         output.append("- Populate: placeholders to be populated\n")
         yield "\n".join(output)
 
-    async def generate_template_from_markdown(self, client, user_message, headers=None):
+    async def generate_template_from_markdown(self, client, user_message):
         """
         Generate a template from a markdown document provided by the user.
         """
@@ -1582,7 +1850,7 @@ class Pipe:
         section_tree = []
         current_sections = {0: None}
         section_content = {}
-        current_section_type = "generate"
+        current_section_type = "free_text"
         current_section_populate_fields = []
         for line in markdown_lines:
             if line.startswith('#'):
@@ -1610,11 +1878,11 @@ class Pipe:
                             current_section_populate_fields = []
                             yield f"Warning: Error parsing populate fields in '{title}'.\n"
                     else:
-                        current_section_type = "generate"
+                        current_section_type = "free_text"
                         current_section_populate_fields = []
                     line = f"# {title}"
                 else:
-                    current_section_type = "generate"
+                    current_section_type = "free_text"
                     current_section_populate_fields = []
                 level = len(re.match(r'(#+)', line).group(1))
                 title = line[level:].strip()
@@ -1939,11 +2207,14 @@ class Pipe:
             yield "</think>\n\n"
             yield f"# Template Update Failed\n\nAn unexpected error occurred: {e}"
 
-    async def _query_thinking_model(self, client, system_prompt, user_prompt, extract_json=False, temperature=0.3, force_first_element=False, **kwargs):
+    async def _query_thinking_model(self, client, system_prompt, user_prompt, extract_json=False, temperature=0.3, force_first_element=False, ctx=None, **kwargs):
         """
         Query the thinking model and clean the response.
         """
         start_time = asyncio.get_event_loop().time()
+        if not ctx:
+            logger.error("No context provided for thinking model query")
+            raise ValueError("No context provided for thinking model query")
         try:
             payload = {
                 "model": self.valves.THINKING_MODEL_ID,
@@ -1952,27 +2223,20 @@ class Pipe:
                     {"role": "user", "content": user_prompt}
                 ] + kwargs.get("messages", []),
                 "temperature": temperature,
-                "max_tokens": kwargs.get("max_tokens", 4000)
+                "max_tokens": kwargs.get("max_tokens", self.valves.MAX_THINKING_TOKENS)
             }
             logger.info(f"Payload Messages: {payload['messages']}")
-            response = await client.post(
-                f"{self.valves.THINKING_API_HOST}/chat/completions",
-                headers=self._get_api_headers(self.valves.THINKING_API_KEY or self.valves.API_KEY),
-                json=payload,
-                timeout=60
-            )
-            response.raise_for_status()
-            response_data = response.json()
+            result = await self._call_thinking_api(client, "/chat/completions", payload, ctx, 60, stream=False)
             elapsed_time = asyncio.get_event_loop().time() - start_time
             logger.info(f"Thinking model query completed in {elapsed_time:.3f} seconds")
-            logger.info(f"Response data: {response_data}")
-            content = response_data.get("choices", [])[0].get("message", {}).get("content", "")
+            logger.info(f"Response data: {result}")
+            content = result.get("choices", [])[0].get("message", {}).get("content", "")
             if extract_json:
                 content = self._extract_json_from_response(content, force_first_element)
             return content
         except Exception as e:
             logger.error(f"Error querying thinking model: {e}")
-            raise
+            raise e
 
     def generate_document_outline(self, document=None, template_id: str = None) -> str:
         """
@@ -2063,3 +2327,148 @@ class Pipe:
             if not found:
                 return None
         return None
+
+    async def _get_rag_context(self, ctx, topic, section_prompt):
+        """
+        Retrieve context from RAG systems for the given topic and section prompt.
+        Returns context text as a string.
+        """
+
+        if not self.valves.ENABLE_RAG:
+            return ""
+
+        context_texts = []
+
+        logger.info(f"RAG is enabled - using knowledge base to enhance document generation")
+
+        try:
+            # Use vector database retrieval if available
+            if ctx["request"] and hasattr(ctx["request"], "app") and hasattr(ctx["request"].app, "state"):
+                app_state = ctx["request"].app.state
+
+                # Prepare the query combining topic and section prompt
+                # query = f"{topic} {section_prompt}"
+                query = f"{section_prompt}"
+
+                logger.info(f"query: {query}")
+                
+                # Determine which search method to use
+                results = {}
+                # logger.info(f"RAG_HYBRID_SEARCH: {self.valves.RAG_HYBRID_SEARCH}")
+                # logger.info(f"rf: {app_state.rf}")
+                # logger.info(f"EMBEDDING_FUNCTION: {app_state.EMBEDDING_FUNCTION}")
+                # logger.info(f"queries: {query}")
+                # logger.info(f"collection_names: {collection_names}")
+                # logger.info(f"user: {user}")
+                # logger.info(f"used RAG_RESULT_COUNT: {self.valves.RAG_RESULT_COUNT if self.valves.RAG_RESULT_COUNT else app_state.config.RAG_RESULT_COUNT}")
+                # logger.info(f"used RELEVANCE_THRESHOLD: {self.valves.RELEVANCE_THRESHOLD if self.valves.RELEVANCE_THRESHOLD else app_state.config.RELEVANCE_THRESHOLD}")
+                # logger.info(f"used RAG_WEB_SEARCH: {self.valves.RAG_WEB_SEARCH}")
+                logger.info(f"used query_collection_with_hybrid_search?: {self.valves.RAG_HYBRID_SEARCH and hasattr(app_state, 'rf') and app_state.rf}, relevance threshold: {self.valves.RELEVANCE_THRESHOLD if self.valves.RELEVANCE_THRESHOLD else app_state.config.RELEVANCE_THRESHOLD}")
+                # logger.info(f"query_embedding: {app_state.EMBEDDING_FUNCTION(query, user=user)}")
+                
+                k = self.valves.RAG_RESULT_COUNT if self.valves.RAG_RESULT_COUNT else app_state.config.RAG_RESULT_COUNT
+
+                relevance_threshold = self.valves.RELEVANCE_THRESHOLD if self.valves.RELEVANCE_THRESHOLD else app_state.config.RELEVANCE_THRESHOLD
+                if self.valves.RAG_HYBRID_SEARCH:
+                    results = query_collection_with_hybrid_search(
+                        queries=[query],
+                        collection_names=ctx["collection_names"],
+                        embedding_function=lambda query: app_state.EMBEDDING_FUNCTION(
+                            query, user=ctx["user"]
+                        ),
+                        k=k,
+                        reranking_function=app_state.rf,
+                        r=relevance_threshold,
+                    )
+                    # Flatten distances
+                    flattened_distances = [dist for sublist in results["distances"] for dist in sublist]
+                    # Flatten documents
+                    context_texts = [doc for doc_list in results["documents"] for doc in doc_list]
+                    # Filter context_texts based on r
+                    context_texts = [doc for i, doc in enumerate(context_texts) if flattened_distances[i] >= relevance_threshold]
+
+                    logger.info(f"flattened_distances: {[e for e in flattened_distances]}")
+                else:
+                    results = query_collection(
+                        queries=[query],
+                        collection_names=ctx["collection_names"],
+                        embedding_function=lambda query: app_state.EMBEDDING_FUNCTION(
+                            query, user=ctx["user"]
+                        ),
+                        k=k,
+                    )
+                    context_texts = [doc for doc_list in results["documents"] for doc in doc_list]
+
+                logger.info(f"distances: {results['distances']}")
+            
+            # Use web search if enabled
+            if self.valves.RAG_WEB_SEARCH:
+                query = f"{topic} {section_prompt}"
+                web_results = []
+                
+                # Use DuckDuckGo as default, adjust if you want to support other engines
+                if self.valves.RAG_WEB_SEARCH_ENGINE == "duckduckgo":
+                    web_results = await search_duckduckgo(
+                        query=query, 
+                        max_results=self.valves.RAG_RESULT_COUNT
+                    )
+                
+                # Load content from search results
+                if web_results:
+                    web_loader = get_web_loader(ssl_verify=True)
+                    for result in web_results:
+                        if hasattr(result, "url") and result.url:
+                            try:
+                                content = await web_loader.load_content(result.url)
+                                if content:
+                                    context_texts.append(f"From {result.url}:\n{content[:1000]}...")
+                            except Exception as e:
+                                logger.warning(f"Failed to load content from {result.url}: {e}")
+            
+            # Combine all context
+            combined_context = "\n\n---\n\n".join(context_texts)
+            
+            # Log the amount of context retrieved
+            logger.info(f"Retrieved {len(context_texts)} context pieces for RAG")
+            
+            return (combined_context, len(context_texts))
+
+        except Exception as e:
+            logger.error(f"Error retrieving RAG context: {e}")
+            return ""
+        
+    def extract_collection_names(self, data):
+        """
+        Extracts all collection UUID strings from the provided dictionary.
+        
+        The function looks for collections in two ways:
+        1. In the top-level "files" list, it finds any file whose "type" is "collection"
+            and adds its "id" (if present) to the result.
+        2. It also checks each file's nested "files" list and, for each nested file,
+            if the "meta" dictionary contains a "collection_name", that value is added.
+            
+        Args:
+            data (dict): The dictionary to search for collection UUIDs.
+            
+        Returns:
+            list: A list of unique collection UUID strings.
+        """
+        collections = set()
+        if not data or not data.get("files"):
+            return collections
+        
+        # Loop through top-level files, if any.
+        for file in data.get("files", []):
+            # Check if this file is a collection.
+            if file.get("type") == "collection":
+                # Add the collection id if available.
+                if "id" in file:
+                    collections.add(file["id"])
+                
+                # Check nested files for a collection_name in their meta data.
+                for nested_file in file.get("files", []):
+                    meta = nested_file.get("meta", {})
+                    if "collection_name" in meta:
+                        collections.add(meta["collection_name"])
+        
+        return list(collections)
